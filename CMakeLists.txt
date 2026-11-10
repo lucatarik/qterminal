@@ -84,6 +84,8 @@ set(QTERM_SRC
     src/dbusaddressable.cpp
     src/tab-switcher.cpp
     src/qterminalutils.cpp
+    src/terminalcontext.cpp
+    src/tmuxmanager.cpp
 )
 
 set(QTERM_MOC_SRC
@@ -97,6 +99,7 @@ set(QTERM_MOC_SRC
     src/bookmarkswidget.h
     src/fontdialog.h
     src/tab-switcher.h
+    src/tmuxmanager.h
 )
 
 if (Qt6DBus_FOUND)

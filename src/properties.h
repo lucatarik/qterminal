@@ -22,6 +22,7 @@
 #include <QApplication>
 #include <QtCore>
 #include <QFont>
+#include <QKeySequence>
 #include <QFileSystemWatcher>
 #include <QString>
 
@@ -103,6 +104,13 @@ class Properties
 
         bool useCWD;
         bool m_openNewTabRightToActiveTab;
+
+        // sessions kept alive by tmux (see TmuxManager)
+        bool tmuxEnabled;
+        bool tmuxMouse;
+        int tmuxSaveIntervalMinutes;
+        // allow file:// links in the context menu
+        bool openFileLinks;
 
         bool audibleBell;
 

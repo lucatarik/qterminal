@@ -19,6 +19,10 @@ class TerminalConfig
         QStringList getShell();
         bool hasCommand() const;
 
+        //! Name of the tmux session a terminal attaches to (empty: a new one)
+        QString tmuxSession() const { return m_tmuxSession; }
+        void setTmuxSession(const QString &val) { m_tmuxSession = val; }
+
         void setWorkingDirectory(const QString &val);
         void setShell(const QStringList &val);
         void provideCurrentDirectory(const QString &val);
@@ -34,6 +38,7 @@ class TerminalConfig
     	QString m_currentDirectory;
     	QString m_workingDirectory;
         QStringList m_shell;
+        QString m_tmuxSession;
 };
 
 #endif

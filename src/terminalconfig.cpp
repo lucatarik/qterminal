@@ -19,7 +19,8 @@ TerminalConfig::TerminalConfig() = default;
 TerminalConfig::TerminalConfig(const TerminalConfig &cfg)
     : m_currentDirectory(cfg.m_currentDirectory),
       m_workingDirectory(cfg.m_workingDirectory),
-      m_shell(cfg.m_shell) {}
+      m_shell(cfg.m_shell),
+      m_tmuxSession(cfg.m_tmuxSession) {}
 
 QString TerminalConfig::getWorkingDirectory()
 {
@@ -78,7 +79,7 @@ TerminalConfig TerminalConfig::fromDbus(const QHash<QString,QVariant> &termArgsC
     QHash<QString,QVariant> termArgs(termArgsConst);
     if (toSplit != nullptr && !termArgs.contains(QLatin1String(DBUS_ARG_WORKDIR)))
     {
-        termArgs[QLatin1String(DBUS_ARG_WORKDIR)] = QVariant(toSplit->impl()->workingDirectory());
+        termArgs[QLatin1String(DBUS_ARG_WORKDIR)] = QVariant(toSplit->impl()->currentDirectory());
     }
     return TerminalConfig::fromDbus(termArgs);
 }

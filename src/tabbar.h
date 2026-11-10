@@ -22,6 +22,8 @@
 #include <QSize>
 #include <QTabBar>
 
+class QToolButton;
+
 class TabBar : public QTabBar
 {
     Q_OBJECT
@@ -34,11 +36,23 @@ public:
     void setFixedWidthValue(int value);
     void updateWidth();
 
+signals:
+    //! The "new tab" button next to the last tab was clicked
+    void newTabRequested();
+
 protected:
 
     QSize tabSizeHint(int index) const override;
+    void tabLayoutChange() override;
+    void tabInserted(int index) override;
+    void tabRemoved(int index) override;
+    void resizeEvent(QResizeEvent *event) override;
+    void showEvent(QShowEvent *event) override;
 
 private:
+    void placeNewTabButton();
+
+    QToolButton *mNewTabButton;
 
     bool mFixedWidth;
     int mFixedWidthValue;

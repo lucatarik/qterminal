@@ -151,6 +151,10 @@ void Properties::loadSettings()
     saveStateOnExit = m_settings->value(QLatin1String("SaveStateOnExit"), true).toBool();
     useCWD = m_settings->value(QLatin1String("UseCWD"), true).toBool();
     m_openNewTabRightToActiveTab = m_settings->value(QLatin1String("OpenNewTabRightToActiveTab"), false).toBool();
+    tmuxEnabled = m_settings->value(QLatin1String("TmuxEnabled"), true).toBool();
+    tmuxMouse = m_settings->value(QLatin1String("TmuxMouse"), false).toBool();
+    tmuxSaveIntervalMinutes = m_settings->value(QLatin1String("TmuxSaveIntervalMinutes"), 3).toInt();
+    openFileLinks = m_settings->value(QLatin1String("OpenFileLinks"), false).toBool();
     audibleBell = m_settings->value(QLatin1String("AudibleBell"), false).toBool();
     term = m_settings->value(QLatin1String("Term"), QLatin1String("xterm-256color")).toString();
     handleHistoryCommand = m_settings->value(QLatin1String("HandleHistory")).toString();
@@ -287,6 +291,10 @@ void Properties::saveSettings()
     m_settings->setValue(QLatin1String("SaveStateOnExit"), saveStateOnExit);
     m_settings->setValue(QLatin1String("UseCWD"), useCWD);
     m_settings->setValue(QLatin1String("OpenNewTabRightToActiveTab"), m_openNewTabRightToActiveTab);
+    m_settings->setValue(QLatin1String("TmuxEnabled"), tmuxEnabled);
+    m_settings->setValue(QLatin1String("TmuxMouse"), tmuxMouse);
+    m_settings->setValue(QLatin1String("TmuxSaveIntervalMinutes"), tmuxSaveIntervalMinutes);
+    m_settings->setValue(QLatin1String("OpenFileLinks"), openFileLinks);
     m_settings->setValue(QLatin1String("AudibleBell"), audibleBell);
     m_settings->setValue(QLatin1String("Term"), term);
     m_settings->setValue(QLatin1String("HandleHistory"), handleHistoryCommand);

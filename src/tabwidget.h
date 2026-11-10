@@ -19,6 +19,7 @@
 #ifndef TAB_WIDGET
 #define TAB_WIDGET
 
+#include <QJsonArray>
 #include <QTabWidget>
 #include <QMap>
 #include <QAction>
@@ -50,6 +51,12 @@ public:
     const QList<QWidget*>& history() const;
 
     bool hasRunningProcess() const;
+
+    //! The tabs, with their splits and tmux sessions
+    QJsonArray layout() const;
+    /*! Opens a tab for every tmux session no terminal shows, arranged as when
+        last saved. Returns false if there is none. */
+    bool restoreTmuxTabs();
 
 public slots:
     int addNewTab(TerminalConfig cfg);

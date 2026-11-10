@@ -21,6 +21,7 @@
 
 #include "ui_qterminal.h"
 
+#include <QJsonArray>
 #include <QMainWindow>
 #include <QAction>
 
@@ -45,11 +46,16 @@ public:
     ~MainWindow() override;
 
     bool dropMode() { return m_dropMode; }
+    //! Tabs of this window for TmuxManager
+    QJsonArray tmuxLayout() const;
     QMap<QString, QAction*> & leaseActions();
 
     void rebuildActions();
 
     bool closePrompt(const QString &title, const QString &text);
+
+    //! New tab whose terminal starts in \p folder (the terminals preset does not apply)
+    void addTabIn(const QString &folder);
 
     #ifdef HAVE_QDBUS
     QDBusObjectPath getActiveTab();
@@ -129,5 +135,7 @@ private slots:
     void onCurrentTitleChanged(int index);
 
     void handleHistory();
+
+    void setupTmuxMenu();
 };
 #endif //MAINWINDOW_H

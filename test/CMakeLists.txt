@@ -17,6 +17,7 @@ endif()
 add_executable(qterminal_test
     qterminal_test.cpp
     ${CMAKE_SOURCE_DIR}/src/qterminalutils.cpp
+    ${CMAKE_SOURCE_DIR}/src/terminalcontext.cpp
     ${QTERM_TEST_MOC})
 
 target_link_libraries(qterminal_test ${QT_TEST_LIB})

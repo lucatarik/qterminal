@@ -1,0 +1,2839 @@
+diff -ruN -x .git orig/CMakeLists.txt src/CMakeLists.txt
+--- orig/CMakeLists.txt	2026-11-05 12:31:00.070909494 +0100
++++ src/CMakeLists.txt	2026-11-11 00:00:51.749203901 +0100
+@@ -84,6 +84,8 @@
+     src/dbusaddressable.cpp
+     src/tab-switcher.cpp
+     src/qterminalutils.cpp
++    src/terminalcontext.cpp
++    src/tmuxmanager.cpp
+ )
+ 
+ set(QTERM_MOC_SRC
+@@ -97,6 +99,7 @@
+     src/bookmarkswidget.h
+     src/fontdialog.h
+     src/tab-switcher.h
++    src/tmuxmanager.h
+ )
+ 
+ if (Qt6DBus_FOUND)
+diff -ruN -x .git orig/src/main.cpp src/src/main.cpp
+--- orig/src/main.cpp	2026-11-05 12:31:00.071610696 +0100
++++ src/src/main.cpp	2026-11-11 00:00:51.748879301 +0100
+@@ -34,12 +34,14 @@
+ 
+ #include "mainwindow.h"
+ #include "qterminalapp.h"
++#include "tmuxmanager.h"
++#include <QMessageBox>
+ #include "qterminalutils.h"
+ #include "terminalconfig.h"
+ 
+ #define out
+ 
+-const char* const short_options = "vhw:e:dp:";
++const char* const short_options = "vhw:e:dp:T";
+ 
+ static const char* serviceName = "org.lxqt.QTerminal";
+ static const char* ifaceName = "org.lxqt.QTerminal.Process";
+@@ -51,6 +53,7 @@
+     {"execute", 1, nullptr, 'e'},
+     {"drop",    0, nullptr, 'd'},
+     {"profile", 1, nullptr, 'p'},
++    {"no-tmux", 0, nullptr, 'T'},
+     {nullptr,   0, nullptr,  0}
+ };
+ 
+@@ -64,6 +67,7 @@
+     puts("  -e,  --execute <command>  Execute command instead of shell");
+     puts("  -h,  --help               Print this help");
+     puts("  -p,  --profile <name>     Load profile from ~/.config/<name>.conf");
++    puts("  -T,  --no-tmux            Run every terminal as a plain process, without tmux (this run only)");
+     puts("  -v,  --version            Prints application version and exits");
+     puts("  -w,  --workdir <dir>      Start session with specified work directory");
+     puts("\nHomepage: <https://github.com/lxqt/qterminal>");
+@@ -107,6 +111,9 @@
+             case 'p':
+                 Properties::Instance(QString::fromLocal8Bit(optarg));
+                 break;
++            case 'T':
++                TmuxManager::instance()->setDisabled();
++                break;
+             case '?':
+                 print_usage_and_exit(1);
+                 break;
+@@ -220,6 +227,27 @@
+         app->installTranslator(&translator);
+     }
+ 
++    TmuxManager *tmux = TmuxManager::instance();
++    QObject::connect(tmux, &TmuxManager::layoutRequested, app, [app, tmux] {
++        QJsonArray tabs;
++        const auto windows = app->getWindowList();
++        for (MainWindow *window : windows)
++        {
++            const QJsonArray windowTabs = window->tmuxLayout();
++            for (const QJsonValue &tab : windowTabs)
++                tabs.append(tab);
++        }
++        if (!tabs.isEmpty()) // no window left: keep what was saved
++            tmux->saveLayout(tabs);
++    });
++    QObject::connect(tmux, &TmuxManager::statusMessage, app, [app](const QString &message) {
++        QMessageBox *box = new QMessageBox(QMessageBox::Information, QStringLiteral("QTerminal"), message,
++                                           QMessageBox::Ok, app->activeWindow());
++        box->setAttribute(Qt::WA_DeleteOnClose);
++        box->open();
++    });
++    tmux->start();
++
+     TerminalConfig initConfig = TerminalConfig(workdir, shell_command);
+     app->newWindow(dropMode, initConfig);
+ 
+diff -ruN -x .git orig/src/mainwindow.cpp src/src/mainwindow.cpp
+--- orig/src/mainwindow.cpp	2026-11-05 12:31:00.071643068 +0100
++++ src/src/mainwindow.cpp	2026-11-11 00:00:51.748895612 +0100
+@@ -42,6 +42,7 @@
+ #include "propertiesdialog.h"
+ #include "bookmarkswidget.h"
+ #include "qterminalapp.h"
++#include "tmuxmanager.h"
+ #include "dbusaddressable.h"
+ 
+ #include <LayerShellQt/Shell>
+@@ -148,7 +149,50 @@
+     /* The tab should be added after all changes are made to
+        the main window; otherwise, the initial prompt might
+        get jumbled because of changes in internal geometry. */
+-    addNewTab(m_config);
++    setupTmuxMenu();
++
++    // tmux sessions kept from the last run come back as tabs
++    if (m_config.hasCommand() || !TmuxManager::instance()->isActive() || !consoleTabulator->restoreTmuxTabs())
++        addNewTab(m_config);
++}
++
++QJsonArray MainWindow::tmuxLayout() const
++{
++    return consoleTabulator->layout();
++}
++
++void MainWindow::setupTmuxMenu()
++{
++    QMenu *menu = new QMenu(tr("T&mux"), this);
++    m_menuBar->insertMenu(menu_Help->menuAction(), menu);
++    TmuxManager *tmux = TmuxManager::instance();
++
++    QAction *enable = menu->addAction(tr("Persistent sessions (tmux)"));
++    enable->setCheckable(true);
++    enable->setChecked(Properties::Instance()->tmuxEnabled);
++    enable->setToolTip(tr("Applies to the terminals opened from now on"));
++    connect(enable, &QAction::toggled, this, [](bool on) {
++        Properties::Instance()->tmuxEnabled = on;
++        Properties::Instance()->saveSettings();
++        if (on)
++            TmuxManager::instance()->start();
++    });
++    menu->addSeparator();
++    QAction *save = menu->addAction(tr("Save sessions now"));
++    connect(save, &QAction::triggered, this, [] { TmuxManager::instance()->saveNow(); });
++    QAction *restore = menu->addAction(tr("Restore saved sessions"));
++    connect(restore, &QAction::triggered, this, [this] {
++        TmuxManager::instance()->restoreSaved();
++        consoleTabulator->restoreTmuxTabs();
++    });
++
++    connect(menu, &QMenu::aboutToShow, this, [=] {
++        const bool available = tmux->isAvailable();
++        enable->setEnabled(available);
++        enable->setText(available ? tr("Persistent sessions (tmux)") : tr("Persistent sessions (tmux is not installed)"));
++        save->setEnabled(tmux->isActive());
++        restore->setEnabled(tmux->isActive());
++    });
+ }
+ 
+ void MainWindow::rebuildActions()
+@@ -679,6 +723,12 @@
+                 Properties::Instance()->mainWindowState = saveState();
+             }
+         }
++        if (TmuxManager::instance()->isActive() && QTerminalApp::Instance()->getWindowList().size() <= 1)
++        {
++            // quitting: the sessions stay alive for the next start
++            TmuxManager::instance()->setQuitting();
++            TmuxManager::instance()->saveNow(true);
++        }
+         rebuildActions(); // shortcuts may have changed by another running instance
+         Properties::Instance()->saveSettings();
+         for (int i = consoleTabulator->count(); i > 0; --i)
+@@ -941,7 +991,7 @@
+     TerminalConfig cfg;
+     TermWidgetHolder *ch = consoleTabulator->terminalHolder();
+     if (ch)
+-        cfg.provideCurrentDirectory(ch->currentTerminal()->impl()->workingDirectory());
++        cfg.provideCurrentDirectory(ch->currentTerminal()->impl()->currentDirectory());
+ 
+     if (m_dropMode)
+     { // the dropdown process has only one (dropdown) main window
+@@ -1004,6 +1054,11 @@
+     // disabled actions are updated by TabWidget::onCurrentChanged()
+ }
+ 
++void MainWindow::addTabIn(const QString &folder)
++{
++    consoleTabulator->addNewTab(TerminalConfig(folder, QStringList()));
++}
++
+ void MainWindow::onCurrentTitleChanged(int index)
+ {
+     QString title;
+diff -ruN -x .git orig/src/mainwindow.h src/src/mainwindow.h
+--- orig/src/mainwindow.h	2026-11-05 12:31:00.071680099 +0100
++++ src/src/mainwindow.h	2026-11-11 00:00:51.748919918 +0100
+@@ -21,6 +21,7 @@
+ 
+ #include "ui_qterminal.h"
+ 
++#include <QJsonArray>
+ #include <QMainWindow>
+ #include <QAction>
+ 
+@@ -45,12 +46,17 @@
+     ~MainWindow() override;
+ 
+     bool dropMode() { return m_dropMode; }
++    //! Tabs of this window for TmuxManager
++    QJsonArray tmuxLayout() const;
+     QMap<QString, QAction*> & leaseActions();
+ 
+     void rebuildActions();
+ 
+     bool closePrompt(const QString &title, const QString &text);
+ 
++    //! New tab whose terminal starts in \p folder (the terminals preset does not apply)
++    void addTabIn(const QString &folder);
++
+     #ifdef HAVE_QDBUS
+     QDBusObjectPath getActiveTab();
+     QList<QDBusObjectPath> getTabs();
+@@ -129,5 +135,7 @@
+     void onCurrentTitleChanged(int index);
+ 
+     void handleHistory();
++
++    void setupTmuxMenu();
+ };
+ #endif //MAINWINDOW_H
+diff -ruN -x .git orig/src/properties.cpp src/src/properties.cpp
+--- orig/src/properties.cpp	2026-11-05 12:31:00.071783797 +0100
++++ src/src/properties.cpp	2026-11-11 00:00:51.748933124 +0100
+@@ -151,6 +151,10 @@
+     saveStateOnExit = m_settings->value(QLatin1String("SaveStateOnExit"), true).toBool();
+     useCWD = m_settings->value(QLatin1String("UseCWD"), true).toBool();
+     m_openNewTabRightToActiveTab = m_settings->value(QLatin1String("OpenNewTabRightToActiveTab"), false).toBool();
++    tmuxEnabled = m_settings->value(QLatin1String("TmuxEnabled"), true).toBool();
++    tmuxMouse = m_settings->value(QLatin1String("TmuxMouse"), false).toBool();
++    tmuxSaveIntervalMinutes = m_settings->value(QLatin1String("TmuxSaveIntervalMinutes"), 3).toInt();
++    openFileLinks = m_settings->value(QLatin1String("OpenFileLinks"), false).toBool();
+     audibleBell = m_settings->value(QLatin1String("AudibleBell"), false).toBool();
+     term = m_settings->value(QLatin1String("Term"), QLatin1String("xterm-256color")).toString();
+     handleHistoryCommand = m_settings->value(QLatin1String("HandleHistory")).toString();
+@@ -287,6 +291,10 @@
+     m_settings->setValue(QLatin1String("SaveStateOnExit"), saveStateOnExit);
+     m_settings->setValue(QLatin1String("UseCWD"), useCWD);
+     m_settings->setValue(QLatin1String("OpenNewTabRightToActiveTab"), m_openNewTabRightToActiveTab);
++    m_settings->setValue(QLatin1String("TmuxEnabled"), tmuxEnabled);
++    m_settings->setValue(QLatin1String("TmuxMouse"), tmuxMouse);
++    m_settings->setValue(QLatin1String("TmuxSaveIntervalMinutes"), tmuxSaveIntervalMinutes);
++    m_settings->setValue(QLatin1String("OpenFileLinks"), openFileLinks);
+     m_settings->setValue(QLatin1String("AudibleBell"), audibleBell);
+     m_settings->setValue(QLatin1String("Term"), term);
+     m_settings->setValue(QLatin1String("HandleHistory"), handleHistoryCommand);
+diff -ruN -x .git orig/src/properties.h src/src/properties.h
+--- orig/src/properties.h	2026-11-05 12:31:00.071812352 +0100
++++ src/src/properties.h	2026-11-11 00:00:51.748950717 +0100
+@@ -22,6 +22,7 @@
+ #include <QApplication>
+ #include <QtCore>
+ #include <QFont>
++#include <QKeySequence>
+ #include <QFileSystemWatcher>
+ #include <QString>
+ 
+@@ -104,6 +105,13 @@
+         bool useCWD;
+         bool m_openNewTabRightToActiveTab;
+ 
++        // sessions kept alive by tmux (see TmuxManager)
++        bool tmuxEnabled;
++        bool tmuxMouse;
++        int tmuxSaveIntervalMinutes;
++        // allow file:// links in the context menu
++        bool openFileLinks;
++
+         bool audibleBell;
+ 
+         QString term;
+diff -ruN -x .git orig/src/tabbar.cpp src/src/tabbar.cpp
+--- orig/src/tabbar.cpp	2026-11-05 12:31:00.071989511 +0100
++++ src/src/tabbar.cpp	2026-11-11 00:00:51.748963822 +0100
+@@ -20,6 +20,9 @@
+ #include <QPainter>
+ #include <QStyleOption>
+ #include <QProxyStyle>
++#include <QToolButton>
++#include <QIcon>
++#include <QTimer>
+ 
+ class TabTextStyle : public QProxyStyle
+ { // Give a normal font to inactive tabs.
+@@ -56,6 +59,7 @@
+ 
+ TabBar::TabBar(QWidget *parent)
+     : QTabBar(parent),
++      mNewTabButton(new QToolButton(this)),
+       mFixedWidth(false),
+       mFixedWidthValue(0)
+ {
+@@ -70,6 +74,86 @@
+     TabTextStyle *s = new TabTextStyle;
+     s->setParent(this);
+     setStyle(s);
++
++    // the button that opens a new tab sits right after the last tab
++    mNewTabButton->setAutoRaise(true);
++    mNewTabButton->setFocusPolicy(Qt::NoFocus);
++    mNewTabButton->setToolTip(tr("New tab"));
++    const QIcon icon = QIcon::fromTheme(QStringLiteral("list-add"));
++    if (icon.isNull())
++        mNewTabButton->setText(QStringLiteral("+"));
++    else
++        mNewTabButton->setIcon(icon);
++    connect(mNewTabButton, &QToolButton::clicked, this, &TabBar::newTabRequested);
++}
++
++void TabBar::placeNewTabButton()
++{
++    if (count() == 0)
++    {
++        mNewTabButton->hide();
++        return;
++    }
++    const bool vertical = shape() == QTabBar::RoundedEast || shape() == QTabBar::TriangularEast
++                          || shape() == QTabBar::RoundedWest || shape() == QTabBar::TriangularWest;
++    const QSize size(qMin(mNewTabButton->sizeHint().width(), qMax(16, tabRect(0).height())),
++                     qMin(mNewTabButton->sizeHint().height(), qMax(16, tabRect(0).height())));
++    mNewTabButton->resize(size);
++
++    // the scroll arrows of a bar with too many tabs sit at its far end
++    int reserved = 0;
++    const auto buttons = findChildren<QToolButton*>(QString(), Qt::FindDirectChildrenOnly);
++    for (QToolButton *button : buttons)
++    {
++        if (button != mNewTabButton && button->isVisible())
++            reserved += vertical ? button->height() : button->width();
++    }
++
++    const QRect last = tabRect(count() - 1);
++    QPoint pos;
++    if (vertical)
++    {
++        pos = QPoint((width() - size.width()) / 2,
++                     qMin(last.bottom() + 3, height() - size.height() - reserved));
++    }
++    else
++    {
++        pos = QPoint(qMin(last.right() + 3, width() - size.width() - reserved),
++                     (height() - size.height()) / 2);
++    }
++    mNewTabButton->move(qMax(0, pos.x()), qMax(0, pos.y()));
++    mNewTabButton->show();
++    mNewTabButton->raise();
++}
++
++void TabBar::tabLayoutChange()
++{
++    QTabBar::tabLayoutChange();
++    placeNewTabButton();
++}
++
++void TabBar::tabInserted(int index)
++{
++    QTabBar::tabInserted(index);
++    placeNewTabButton();
++}
++
++void TabBar::tabRemoved(int index)
++{
++    QTabBar::tabRemoved(index);
++    placeNewTabButton();
++}
++
++void TabBar::resizeEvent(QResizeEvent *event)
++{
++    QTabBar::resizeEvent(event);
++    placeNewTabButton();
++}
++
++void TabBar::showEvent(QShowEvent *event)
++{
++    QTabBar::showEvent(event);
++    placeNewTabButton();
+ }
+ 
+ void TabBar::setFixedWidth(bool fixedWidth)
+diff -ruN -x .git orig/src/tabbar.h src/src/tabbar.h
+--- orig/src/tabbar.h	2026-11-05 12:31:00.071999169 +0100
++++ src/src/tabbar.h	2026-11-11 00:00:51.748975264 +0100
+@@ -22,6 +22,8 @@
+ #include <QSize>
+ #include <QTabBar>
+ 
++class QToolButton;
++
+ class TabBar : public QTabBar
+ {
+     Q_OBJECT
+@@ -34,11 +36,23 @@
+     void setFixedWidthValue(int value);
+     void updateWidth();
+ 
++signals:
++    //! The "new tab" button next to the last tab was clicked
++    void newTabRequested();
++
+ protected:
+ 
+     QSize tabSizeHint(int index) const override;
++    void tabLayoutChange() override;
++    void tabInserted(int index) override;
++    void tabRemoved(int index) override;
++    void resizeEvent(QResizeEvent *event) override;
++    void showEvent(QShowEvent *event) override;
+ 
+ private:
++    void placeNewTabButton();
++
++    QToolButton *mNewTabButton;
+ 
+     bool mFixedWidth;
+     int mFixedWidthValue;
+diff -ruN -x .git orig/src/tabwidget.cpp src/src/tabwidget.cpp
+--- orig/src/tabwidget.cpp	2026-11-05 12:31:00.072009950 +0100
++++ src/src/tabwidget.cpp	2026-11-11 00:00:51.748986185 +0100
+@@ -33,6 +33,9 @@
+ #include "properties.h"
+ #include "qterminalapp.h"
+ #include "tab-switcher.h"
++#include "tmuxmanager.h"
++#include <QJsonObject>
++#include <QSet>
+ 
+ 
+ #define TAB_INDEX_PROPERTY "tab_index"
+@@ -58,6 +61,10 @@
+ 
+     tabBar()->installEventFilter(this);
+ 
++    connect(mTabBar, &TabBar::newTabRequested, this, [this] {
++        if (auto *window = findParent<MainWindow>(this))
++            QMetaObject::invokeMethod(window, "addNewTab");
++    });
+     connect(this, &TabWidget::tabCloseRequested, this, [this](int indx) {
+         removeTab(indx, true);
+     });
+@@ -86,7 +93,7 @@
+ 
+     TermWidgetHolder *ch = terminalHolder();
+     if (ch)
+-        config.provideCurrentDirectory(ch->currentTerminal()->impl()->workingDirectory());
++        config.provideCurrentDirectory(ch->currentTerminal()->impl()->currentDirectory());
+ 
+     TermWidgetHolder *console = new TermWidgetHolder(config, this);
+     console->setWindowTitle(label);
+@@ -145,7 +152,7 @@
+     {
+         if (auto impl = terminalHolder()->currentTerminal()->impl())
+         {
+-            if (impl->hasCommand() || impl->getForegroundProcessId() != impl->getShellPID())
++            if (impl->hasForegroundJob())
+             {
+                 if (!win->closePrompt(tr("Close Subterminal"), tr("Are you sure you want to close this subterminal?")))
+                 {
+@@ -161,7 +168,7 @@
+ 
+ void TabWidget::copySelection()
+ {
+-    terminalHolder()->currentTerminal()->impl()->copyClipboard();
++    terminalHolder()->currentTerminal()->copySelection();
+ }
+ 
+ void TabWidget::pasteClipboard()
+@@ -675,3 +682,92 @@
+     }
+     return false;
+ }
++
++QJsonArray TabWidget::layout() const
++{
++    QJsonArray tabs;
++    for (int i = 0; i < count(); i++)
++    {
++        if (auto *holder = qobject_cast<TermWidgetHolder*>(widget(i)))
++        {
++            QJsonObject tab;
++            tab[QStringLiteral("title")] = tabText(i);
++            tab[QStringLiteral("root")] = holder->layout();
++            tabs.append(tab);
++        }
++    }
++    return tabs;
++}
++
++// keeps the terminals of the sessions in \p available; nothing left: empty object
++static QJsonObject pruneLayout(const QJsonObject &node, const QSet<QString> &available)
++{
++    if (node.contains(QStringLiteral("session")))
++        return available.contains(node.value(QStringLiteral("session")).toString()) ? node : QJsonObject();
++    QJsonArray children;
++    const QJsonArray all = node.value(QStringLiteral("c")).toArray();
++    for (const QJsonValue &value : all)
++    {
++        const QJsonObject child = pruneLayout(value.toObject(), available);
++        if (!child.isEmpty())
++            children.append(child);
++    }
++    if (children.isEmpty())
++        return QJsonObject();
++    QJsonObject pruned = node;
++    pruned[QStringLiteral("c")] = children;
++    if (children.size() != all.size())
++        pruned.remove(QStringLiteral("sizes"));
++    return pruned;
++}
++
++static void layoutSessions(const QJsonObject &node, QStringList &sessions)
++{
++    if (node.contains(QStringLiteral("session")))
++    {
++        sessions << node.value(QStringLiteral("session")).toString();
++        return;
++    }
++    const QJsonArray children = node.value(QStringLiteral("c")).toArray();
++    for (const QJsonValue &child : children)
++        layoutSessions(child.toObject(), sessions);
++}
++
++bool TabWidget::restoreTmuxTabs()
++{
++    TmuxManager *tmux = TmuxManager::instance();
++    const QStringList detached = tmux->detachedSessions();
++    if (detached.isEmpty())
++        return false;
++    QSet<QString> available(detached.begin(), detached.end());
++
++    const QJsonArray saved = tmux->loadLayout();
++    for (const QJsonValue &value : saved)
++    {
++        const QJsonObject tab = value.toObject();
++        const QJsonObject root = pruneLayout(tab.value(QStringLiteral("root")).toObject(), available);
++        QStringList sessions;
++        layoutSessions(root, sessions);
++        if (sessions.isEmpty())
++            continue;
++        TerminalConfig cfg;
++        cfg.setTmuxSession(sessions.first());
++        const int index = addNewTab(cfg);
++        if (auto *holder = qobject_cast<TermWidgetHolder*>(widget(index)))
++            holder->applyLayout(root);
++        const QString title = tab.value(QStringLiteral("title")).toString();
++        if (!title.isEmpty())
++            setTabText(index, title);
++        for (const QString &session : std::as_const(sessions))
++            available.remove(session);
++    }
++    for (const QString &session : detached)
++    {
++        if (!available.contains(session))
++            continue;
++        TerminalConfig cfg;
++        cfg.setTmuxSession(session);
++        addNewTab(cfg);
++    }
++    return count() > 0;
++}
+diff -ruN -x .git orig/src/tabwidget.h src/src/tabwidget.h
+--- orig/src/tabwidget.h	2026-11-05 12:31:00.072024067 +0100
++++ src/src/tabwidget.h	2026-11-11 00:00:51.749003358 +0100
+@@ -19,6 +19,7 @@
+ #ifndef TAB_WIDGET
+ #define TAB_WIDGET
+ 
++#include <QJsonArray>
+ #include <QTabWidget>
+ #include <QMap>
+ #include <QAction>
+@@ -51,6 +52,12 @@
+ 
+     bool hasRunningProcess() const;
+ 
++    //! The tabs, with their splits and tmux sessions
++    QJsonArray layout() const;
++    /*! Opens a tab for every tmux session no terminal shows, arranged as when
++        last saved. Returns false if there is none. */
++    bool restoreTmuxTabs();
++
+ public slots:
+     int addNewTab(TerminalConfig cfg);
+     void removeTab(int index, bool prompt = false);
+diff -ruN -x .git orig/src/terminalconfig.cpp src/src/terminalconfig.cpp
+--- orig/src/terminalconfig.cpp	2026-11-05 12:31:00.072033275 +0100
++++ src/src/terminalconfig.cpp	2026-11-11 00:00:51.749015070 +0100
+@@ -19,7 +19,8 @@
+ TerminalConfig::TerminalConfig(const TerminalConfig &cfg)
+     : m_currentDirectory(cfg.m_currentDirectory),
+       m_workingDirectory(cfg.m_workingDirectory),
+-      m_shell(cfg.m_shell) {}
++      m_shell(cfg.m_shell),
++      m_tmuxSession(cfg.m_tmuxSession) {}
+ 
+ QString TerminalConfig::getWorkingDirectory()
+ {
+@@ -78,7 +79,7 @@
+     QHash<QString,QVariant> termArgs(termArgsConst);
+     if (toSplit != nullptr && !termArgs.contains(QLatin1String(DBUS_ARG_WORKDIR)))
+     {
+-        termArgs[QLatin1String(DBUS_ARG_WORKDIR)] = QVariant(toSplit->impl()->workingDirectory());
++        termArgs[QLatin1String(DBUS_ARG_WORKDIR)] = QVariant(toSplit->impl()->currentDirectory());
+     }
+     return TerminalConfig::fromDbus(termArgs);
+ }
+diff -ruN -x .git orig/src/terminalconfig.h src/src/terminalconfig.h
+--- orig/src/terminalconfig.h	2026-11-05 12:31:00.072042963 +0100
++++ src/src/terminalconfig.h	2026-11-11 00:00:51.749026983 +0100
+@@ -19,6 +19,10 @@
+         QStringList getShell();
+         bool hasCommand() const;
+ 
++        //! Name of the tmux session a terminal attaches to (empty: a new one)
++        QString tmuxSession() const { return m_tmuxSession; }
++        void setTmuxSession(const QString &val) { m_tmuxSession = val; }
++
+         void setWorkingDirectory(const QString &val);
+         void setShell(const QStringList &val);
+         void provideCurrentDirectory(const QString &val);
+@@ -34,6 +38,7 @@
+     	QString m_currentDirectory;
+     	QString m_workingDirectory;
+         QStringList m_shell;
++        QString m_tmuxSession;
+ };
+ 
+ #endif
+diff -ruN -x .git orig/src/terminalcontext.cpp src/src/terminalcontext.cpp
+--- orig/src/terminalcontext.cpp	1970-01-01 01:00:00.000000000 +0100
++++ src/src/terminalcontext.cpp	2026-11-11 00:00:51.749036942 +0100
+@@ -0,0 +1,186 @@
++/***************************************************************************
++ *   This program is free software; you can redistribute it and/or modify  *
++ *   it under the terms of the GNU General Public License as published by  *
++ *   the Free Software Foundation; either version 2 of the License, or     *
++ *   (at your option) any later version.                                   *
++ *                                                                         *
++ *   This program is distributed in the hope that it will be useful,       *
++ *   but WITHOUT ANY WARRANTY; without even the implied warranty of        *
++ *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         *
++ *   GNU General Public License for more details.                          *
++ *                                                                         *
++ *   You should have received a copy of the GNU General Public License     *
++ *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
++ ***************************************************************************/
++
++#include "terminalcontext.h"
++
++#include <QDir>
++#include <QRegularExpression>
++
++namespace TerminalContext
++{
++
++namespace
++{
++
++bool isPromptSymbol(QChar c)
++{
++    return c == QLatin1Char('$') || c == QLatin1Char('#') || c == QLatin1Char('>');
++}
++
++// characters that end a path token (a path itself may contain any other)
++bool isTokenSeparator(QChar c)
++{
++    if (c.isSpace())
++        return true;
++    switch (c.unicode())
++    {
++    case '"': case '\'': case '`': case '(': case ')': case '[': case ']':
++    case '{': case '}': case ',': case ';': case '|': case '<':
++        return true;
++    default:
++        return false;
++    }
++}
++
++bool hasPathPrefix(const QString &s, int from)
++{
++    return s.mid(from, 1) == QLatin1String("/")
++           || s.mid(from, 2) == QLatin1String("./")
++           || s.mid(from, 3) == QLatin1String("../")
++           || s.mid(from, 2) == QLatin1String("~/");
++}
++
++}
++
++QString stripLineBreaks(const QString &text)
++{
++    QString out;
++    out.reserve(text.size());
++    for (const QChar c : text)
++    {
++        if (c != QLatin1Char('\n') && c != QLatin1Char('\r')
++            && c != QChar(0x2028) && c != QChar(0x2029))
++        {
++            out.append(c);
++        }
++    }
++    return out;
++}
++
++QString cleanCommand(const QString &line)
++{
++    QString s = stripLineBreaks(line);
++
++    static const QRegularExpression leading(QStringLiteral("^\\s+"));
++    static const QRegularExpression lineNumber(QStringLiteral("^\\d+\\s+"));
++    static const QRegularExpression diffMarker(QStringLiteral("^[+-]\\s*"));
++    static const QRegularExpression prompt(QStringLiteral("^(?:[$#>]\\s+|❯\\s*)"));
++
++    s.remove(leading);
++    s.remove(lineNumber);
++    s.remove(diffMarker);
++    s.remove(prompt);
++
++    int end = s.size();
++    while (end > 0 && s.at(end - 1).isSpace())
++        --end;
++    s.truncate(end);
++    return s;
++}
++
++QString pathAt(const QString &line, int index)
++{
++    if (index < 0 || index >= line.size() || isTokenSeparator(line.at(index)))
++        return QString();
++
++    int begin = index;
++    while (begin > 0 && !isTokenSeparator(line.at(begin - 1)))
++        --begin;
++    int end = index + 1;
++    while (end < line.size() && !isTokenSeparator(line.at(end)))
++        ++end;
++
++    QString token = line.mid(begin, end - begin);
++    if (token.contains(QLatin1String("://")))
++        return QString(); // a web address, not a path
++
++    // the prompt symbol glued to the end is not part of the path
++    while (!token.isEmpty() && isPromptSymbol(token.at(token.size() - 1)))
++        token.chop(1);
++    if (index - begin >= token.size())
++        return QString();
++
++    // the path may follow "user@host:" in a prompt or "option=" in an argument
++    int start = -1;
++    for (int p = 0; p < token.size(); ++p)
++    {
++        if (!hasPathPrefix(token, p))
++            continue;
++        if (p > 0)
++        {
++            const QChar before = token.at(p - 1);
++            if (before != QLatin1Char(':') && before != QLatin1Char('='))
++                continue;
++        }
++        start = p;
++        break;
++    }
++    if (start < 0 || index - begin < start)
++        return QString();
++
++    QString path = token.mid(start);
++    static const QRegularExpression position(QStringLiteral(":\\d+(?::\\d+)?$"));
++    auto chopPunctuation = [&path]() {
++        while (path.size() > 1 && path != QLatin1String("./") && path != QLatin1String("../")
++               && (path.endsWith(QLatin1Char('.')) || path.endsWith(QLatin1Char(':'))
++                   || path.endsWith(QLatin1Char('!')) || path.endsWith(QLatin1Char('?'))))
++        {
++            path.chop(1);
++        }
++    };
++    chopPunctuation();
++    path.remove(position);
++    chopPunctuation();
++    return path.size() < 2 ? QString() : path;
++}
++
++QString absolutePath(const QString &path, const QString &cwd, const QString &home)
++{
++    if (path.isEmpty())
++        return path;
++    if (path.startsWith(QLatin1String("~/")))
++        return home.isEmpty() ? path : QDir::cleanPath(home + path.mid(1));
++    if (path.startsWith(QLatin1Char('/')))
++        return QDir::cleanPath(path);
++    return cwd.isEmpty() ? path : QDir::cleanPath(cwd + QLatin1Char('/') + path);
++}
++
++bool isSafeUrl(const QUrl &url, bool allowFile)
++{
++    if (!url.isValid())
++        return false;
++    const QString scheme = url.scheme().toLower();
++    return scheme == QLatin1String("http") || scheme == QLatin1String("https")
++           || scheme == QLatin1String("mailto")
++           || (allowFile && scheme == QLatin1String("file"));
++}
++
++QPair<int, int> wordRangeAt(const QString &line, int index, const QString &wordCharacters)
++{
++    auto isWordChar = [&wordCharacters](QChar c) {
++        return c.isLetterOrNumber() || wordCharacters.contains(c);
++    };
++    if (index < 0 || index >= line.size() || !isWordChar(line.at(index)))
++        return {-1, -1};
++    int first = index;
++    while (first > 0 && isWordChar(line.at(first - 1)))
++        --first;
++    int last = index;
++    while (last + 1 < line.size() && isWordChar(line.at(last + 1)))
++        ++last;
++    return {first, last};
++}
++
++}
+diff -ruN -x .git orig/src/terminalcontext.h src/src/terminalcontext.h
+--- orig/src/terminalcontext.h	1970-01-01 01:00:00.000000000 +0100
++++ src/src/terminalcontext.h	2026-11-11 00:00:51.749049135 +0100
+@@ -0,0 +1,64 @@
++/***************************************************************************
++ *   This program is free software; you can redistribute it and/or modify  *
++ *   it under the terms of the GNU General Public License as published by  *
++ *   the Free Software Foundation; either version 2 of the License, or     *
++ *   (at your option) any later version.                                   *
++ *                                                                         *
++ *   This program is distributed in the hope that it will be useful,       *
++ *   but WITHOUT ANY WARRANTY; without even the implied warranty of        *
++ *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         *
++ *   GNU General Public License for more details.                          *
++ *                                                                         *
++ *   You should have received a copy of the GNU General Public License     *
++ *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
++ ***************************************************************************/
++
++#ifndef TERMINALCONTEXT_H
++#define TERMINALCONTEXT_H
++
++#include <QString>
++#include <QUrl>
++
++/*!
++ * Text helpers behind the terminal's context menu. They work on plain
++ * strings only, so they can be tested without any widget.
++ */
++namespace TerminalContext
++{
++
++/*! Removes \n, \r, U+2028 and U+2029 and joins the lines without adding spaces. */
++QString stripLineBreaks(const QString &text);
++
++/*!
++ * Reduces a terminal line to the command it holds: drops leading spaces, a
++ * line number, a diff marker (+ or -) and a prompt symbol ($, #, > or ❯),
++ * then drops trailing spaces and line breaks.
++ */
++QString cleanCommand(const QString &line);
++
++/*!
++ * Returns the file path under column \p index of \p line, or an empty string.
++ * A path starts with "/", "./", "../" or "~/". A ":line[:column]" suffix and
++ * prompt symbols ($, # and >) glued to the end are not part of the path.
++ */
++QString pathAt(const QString &line, int index);
++
++/*!
++ * Makes \p path absolute: "~/" is expanded with \p home and a relative path
++ * is joined to \p cwd. A relative path is returned unchanged if \p cwd is empty.
++ */
++QString absolutePath(const QString &path, const QString &cwd, const QString &home);
++
++/*! Only web and mail links (and local files, if \p allowFile) may be opened. */
++bool isSafeUrl(const QUrl &url, bool allowFile);
++
++/*!
++ * Returns the [first, last] character range of the word around \p index.
++ * A word is made of letters, digits and \p wordCharacters. Returns {-1, -1}
++ * if there is no word there.
++ */
++QPair<int, int> wordRangeAt(const QString &line, int index, const QString &wordCharacters);
++
++}
++
++#endif // TERMINALCONTEXT_H
+diff -ruN -x .git orig/src/termwidget.cpp src/src/termwidget.cpp
+--- orig/src/termwidget.cpp	2026-11-05 12:31:00.072052702 +0100
++++ src/src/termwidget.cpp	2026-11-11 00:00:51.749130391 +0100
+@@ -17,13 +17,31 @@
+  ***************************************************************************/
+ 
+ #include <QMenu>
++#include <QHBoxLayout>
+ #include <QVBoxLayout>
+ #include <QPainter>
+ #include <QDesktopServices>
+ #include <QMessageBox>
+ #include <QAbstractButton>
+ #include <QMouseEvent>
++#include <QKeyEvent>
++#include <QWheelEvent>
++#include <QApplication>
++#include <QBuffer>
++#include <QClipboard>
++#include <QDir>
++#include <QFileInfo>
++#include <QProcess>
++#include <QScrollBar>
++#include <QStandardPaths>
++#include <QSocketNotifier>
++#include <QStyle>
++#include <QTimer>
++#include <QUrl>
+ #include <cassert>
++#include <cerrno>
++#include <fcntl.h>
++#include <unistd.h>
+ 
+ #ifdef HAVE_QDBUS
+     #include <QtDBus/QtDBus>
+@@ -40,6 +58,8 @@
+ #include "config.h"
+ #include "properties.h"
+ #include "qterminalapp.h"
++#include "terminalcontext.h"
++#include "tmuxmanager.h"
+ 
+ static int TermWidgetCount = 0;
+ 
+@@ -64,6 +84,13 @@
+     setWorkingDirectory(cfg.getWorkingDirectory());
+ 
+     QStringList shell = cfg.getShell();
++    if (!m_hasCommand && TmuxManager::instance()->isActive())
++    {
++        // every terminal shows a tmux session of its own: it outlives the terminal
++        m_tmuxSession = cfg.tmuxSession().isEmpty() ? TmuxManager::instance()->newSessionName() : cfg.tmuxSession();
++        shell = TmuxManager::instance()->clientCommand(m_tmuxSession, cfg.getWorkingDirectory(),
++                                                       Properties::Instance()->shell);
++    }
+     if (!shell.isEmpty())
+     {
+         setShellProgram(shell.at(0));
+@@ -98,6 +125,9 @@
+ 
+ TermWidgetImpl::~TermWidgetImpl()
+ {
++    // closing a terminal ends its session, quitting the program keeps it
++    if (!m_tmuxSession.isEmpty() && !TmuxManager::instance()->isQuitting())
++        TmuxManager::instance()->killSession(m_tmuxSession);
+ #ifdef HAVE_LIBCANBERRA
+     if (libcanberra_context) {
+         ca_context_destroy (libcanberra_context);
+@@ -105,6 +135,24 @@
+ #endif
+ }
+ 
++TermWidgetImpl::TermWidgetImpl(TermWidgetImpl *live, QWidget *parent)
++    : QTermWidget(0, parent)
++#ifdef HAVE_LIBCANBERRA
++    , libcanberra_context(nullptr)
++#endif
++    , m_hasCommand(false)
++    , m_live(live)
++{
++    setObjectName(live->objectName() + QStringLiteral("_history"));
++    setFlowControlEnabled(false);
++    setFlowControlWarningEnabled(false);
++    propertiesChanged();
++    setScrollBarPosition(QTermWidget::NoScrollBar); // the bar of the terminal drives this view
++    // the menu is opened by TmuxScrollBar, which gets the click first
++    setContextMenuPolicy(Qt::NoContextMenu);
++    connect(this, &QTermWidget::urlActivated, this, &TermWidgetImpl::activateUrl);
++}
++
+ void TermWidgetImpl::propertiesChanged()
+ {
+     setMargin(Properties::Instance()->terminalMargin);
+@@ -137,7 +185,8 @@
+     setBoldIntense(Properties::Instance()->boldIntense);
+ 
+     /* be consequent with qtermwidget.h here */
+-    switch(Properties::Instance()->scrollBarPos) {
++    // under tmux the history is tmux's: TmuxScrollBar shows it instead
++    switch(m_tmuxSession.isEmpty() ? Properties::Instance()->scrollBarPos : 0) {
+     case 0:
+         setScrollBarPosition(QTermWidget::NoScrollBar);
+         break;
+@@ -168,6 +217,195 @@
+     update();
+ }
+ 
++QString TermWidgetImpl::currentDirectory()
++{
++    if (m_live)
++        return m_live->currentDirectory();
++    if (!m_tmuxSession.isEmpty())
++    {
++        const QString path = TmuxManager::instance()->paneCurrentPath(m_tmuxSession);
++        if (!path.isEmpty())
++            return path;
++    }
++    return workingDirectory();
++}
++
++void TermWidgetImpl::clearTerminal()
++{
++    clear();
++    // tmux owns the screen and would draw its content again
++    if (!m_tmuxSession.isEmpty())
++        TmuxManager::instance()->clearPane(m_tmuxSession);
++}
++
++bool TermWidgetImpl::hasForegroundJob()
++{
++    if (m_hasCommand)
++        return true;
++    if (!m_tmuxSession.isEmpty())
++        return TmuxManager::instance()->sessionBusy(m_tmuxSession);
++    return getForegroundProcessId() != getShellPID();
++}
++
++static QWidget *terminalDisplayOf(const QWidget *term)
++{
++    const auto kids = term->findChildren<QWidget*>(QString(), Qt::FindDirectChildrenOnly);
++    for (QWidget *kid : kids)
++    {
++        if (kid->inherits("Konsole::TerminalDisplay"))
++            return kid;
++    }
++    return nullptr;
++}
++
++// The geometry follows Konsole::TerminalDisplay (calcGeometry, fontChange and
++// getCharacterPosition), whose cell lookup is not exported.
++bool TermWidgetImpl::cellAt(const QPoint &pos, int &row, int &column) const
++{
++    QWidget *display = terminalDisplayOf(this);
++    if (!display)
++        return false;
++    TermWidgetImpl *self = const_cast<TermWidgetImpl*>(this);
++    const QPoint p = display->mapFrom(self, pos);
++    const QRect area = display->contentsRect();
++    if (!area.contains(p))
++        return false;
++
++    static const char REPCHAR[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
++                                  "abcdefghijklmnopqrstuvwxyz"
++                                  "0123456789./+@";
++    const QFontMetrics fm(display->font());
++    const int cellHeight = qMax(1, fm.height());
++    const int cellWidth = qMax(1, qRound(double(fm.horizontalAdvance(QLatin1String(REPCHAR))) / double(qstrlen(REPCHAR))));
++
++    int leftMargin = getMargin();
++    const auto bars = display->findChildren<QScrollBar*>(QString(), Qt::FindDirectChildrenOnly);
++    for (QScrollBar *bar : bars)
++    {
++        const bool transient = bar->style()->styleHint(QStyle::SH_ScrollBar_Transient, nullptr, bar);
++        if (!bar->isHidden() && !transient && bar->geometry().center().x() < display->width() / 2)
++            leftMargin += bar->width();
++    }
++
++    row = qBound(0, (p.y() - area.top() - getMargin()) / cellHeight, qMax(0, self->screenLinesCount() - 1));
++    column = qBound(0, (p.x() - area.left() - leftMargin) / cellWidth, qMax(0, self->screenColumnsCount() - 1));
++    return true;
++}
++
++// Text of a screen line, counted from the oldest line of the history.
++// One cell is one character: wide characters shift what follows them.
++QString TermWidgetImpl::screenLine(int absoluteRow) const
++{
++    QByteArray bytes;
++    QBuffer buffer(&bytes);
++    buffer.open(QIODevice::WriteOnly);
++    const_cast<TermWidgetImpl*>(this)->saveHistory(&buffer);
++    buffer.close();
++    const QList<QByteArray> lines = bytes.split('\n');
++    return absoluteRow >= 0 && absoluteRow < lines.size() ? QString::fromUtf8(lines.at(absoluteRow)) : QString();
++}
++
++// Everything the menu entries need is read here, when the menu opens: the
++// entries must act on what was under the pointer then.
++TermWidgetImpl::ContextTarget TermWidgetImpl::contextTargetAt(const QPoint &pos)
++{
++    ContextTarget target;
++    if (!cellAt(pos, target.row, target.column))
++        return target;
++    target.hasCell = true;
++
++    QWidget *display = terminalDisplayOf(this);
++    int scrolled = 0;
++    if (display)
++    {
++        const auto bars = display->findChildren<QScrollBar*>(QString(), Qt::FindDirectChildrenOnly);
++        if (!bars.isEmpty())
++            scrolled = bars.first()->value();
++    }
++    target.absoluteRow = scrolled + target.row;
++
++    if (Konsole::Filter::HotSpot *spot = getHotSpotAt(target.row, target.column))
++    {
++        if (spot->type() == Konsole::Filter::HotSpot::Link)
++        {
++            if (auto *regexpSpot = dynamic_cast<Konsole::RegExpFilter::HotSpot*>(spot))
++            {
++                QString text = regexpSpot->capturedTexts().value(0);
++                if (!text.contains(QLatin1String("://")))
++                {
++                    text.prepend(text.contains(QLatin1Char('@')) ? QStringLiteral("mailto:")
++                                                                 : QStringLiteral("http://"));
++                }
++                target.url = QUrl(text, QUrl::StrictMode);
++            }
++        }
++    }
++
++    target.line = screenLine(target.absoluteRow);
++    if (!target.url.isValid() || target.url.isEmpty())
++    {
++        const QString path = TerminalContext::pathAt(target.line, target.column);
++        if (!path.isEmpty())
++        {
++            const QString absolute = TerminalContext::absolutePath(path, currentDirectory(), QDir::homePath());
++            if (QDir::isAbsolutePath(absolute))
++                target.path = absolute;
++        }
++    }
++    return target;
++}
++
++void TermWidgetImpl::selectCells(int absoluteRow, int firstColumn, int lastColumn)
++{
++    setSelectionStart(absoluteRow, firstColumn);
++    setSelectionEnd(absoluteRow, lastColumn);
++    // The selection is set on the screen, behind the back of the screen window
++    // that feeds the display: re-scrolling to the same line makes the window
++    // read the screen again, then the display redraws.
++    if (QWidget *display = terminalDisplayOf(this))
++    {
++        QMetaObject::invokeMethod(display, "scrollBarPositionChanged", Q_ARG(int, 0));
++        QMetaObject::invokeMethod(display, "updateImage");
++    }
++}
++
++void TermWidgetImpl::openUrlWithBrave(const QUrl &url)
++{
++    // a remote program can print links with any scheme
++    if (!TerminalContext::isSafeUrl(url, Properties::Instance()->openFileLinks))
++        return;
++    QString brave = QStandardPaths::findExecutable(QStringLiteral("brave"));
++    if (brave.isEmpty())
++        brave = QStandardPaths::findExecutable(QStringLiteral("brave-browser"));
++    if (brave.isEmpty())
++    {
++        QMessageBox::warning(this, QStringLiteral("Apri link nel browser Brave"),
++                             QStringLiteral("Il browser Brave (comando \"brave\") non è stato trovato."));
++        return;
++    }
++    QProcess::startDetached(brave, {url.toString(QUrl::FullyEncoded)});
++}
++
++void TermWidgetImpl::openInFileManager(const QString &path)
++{
++    // the folder itself, or the one that holds the file
++    const QFileInfo info(path);
++    const QString folder = info.isDir() ? info.absoluteFilePath() : info.absolutePath();
++    if (QFileInfo(folder).isDir())
++        QDesktopServices::openUrl(QUrl::fromLocalFile(folder)); // does not wait for the file manager
++}
++
++void TermWidgetImpl::pasteWithoutNewlines()
++{
++    QString text = TerminalContext::stripLineBreaks(QApplication::clipboard()->text(QClipboard::Clipboard));
++    if (text.isEmpty())
++        return;
++    // a view of the history has no program: what is pasted goes to the terminal it shows
++    TermWidgetImpl *target = m_live ? m_live : this;
++    target->bracketText(text); // keeps the bracketed paste mode, if the program asked for it
++    target->sendText(text);
++}
++
+ void TermWidgetImpl::customContextMenuCall(const QPoint & pos)
+ {
+     auto mainWindow = findParent<MainWindow>(this);
+@@ -178,12 +416,67 @@
+     QMenu menu(mainWindow);
+     QMap<QString, QAction*> actions = mainWindow->leaseActions();
+ 
++    const ContextTarget target = contextTargetAt(pos);
++
+     QList<QAction*> extraActions = filterActions(pos);
+     for (auto& action : extraActions)
+     {
+         menu.addAction(action);
+     }
+ 
++    // text entries; the labels are in Italian on purpose
++    const QUrl url = target.url;
++    if (url.isValid() && !url.isEmpty() && TerminalContext::isSafeUrl(url, Properties::Instance()->openFileLinks))
++    {
++        menu.addAction(QStringLiteral("Apri link nel browser Brave"), this, [this, url] { openUrlWithBrave(url); });
++    }
++    menu.addAction(QStringLiteral("Incolla senza a capo"), this, [this] { pasteWithoutNewlines(); });
++    if (!target.path.isEmpty())
++    {
++        const QString path = target.path;
++        menu.addAction(QStringLiteral("Copia percorso"), this,
++                       [path] { QApplication::clipboard()->setText(path, QClipboard::Clipboard); });
++        menu.addAction(QStringLiteral("Apri percorso nel file manager"), this,
++                       [this, path] { openInFileManager(path); });
++        // only a path that exists: a new terminal cannot start in one that does not
++        if (QFileInfo::exists(path))
++        {
++            menu.addAction(QStringLiteral("Apri questo percorso nel terminale"), this,
++                           [mainWindow, path] {
++                               // the folder itself, or the one that holds the file
++                               const QFileInfo info(path);
++                               const QString folder = info.isDir() ? info.absoluteFilePath() : info.absolutePath();
++                               mainWindow->addTabIn(folder);
++                           });
++        }
++    }
++    if (target.hasCell)
++    {
++        const int row = target.absoluteRow;
++        const int lastColumn = qMax(0, screenColumnsCount() - 1);
++        const QString line = target.line;
++
++        const QPair<int, int> word = TerminalContext::wordRangeAt(line, target.column, wordCharacters());
++        if (word.first >= 0)
++        {
++            menu.addAction(QStringLiteral("Seleziona parola e copia testo"), this, [this, row, word, line] {
++                selectCells(row, word.first, word.second);
++                QApplication::clipboard()->setText(line.mid(word.first, word.second - word.first + 1), QClipboard::Clipboard);
++            });
++        }
++        menu.addAction(QStringLiteral("Seleziona riga e copia testo"), this, [this, row, lastColumn, line] {
++            selectCells(row, 0, lastColumn);
++            QString text = TerminalContext::stripLineBreaks(line);
++            while (text.endsWith(QLatin1Char(' ')))
++                text.chop(1);
++            QApplication::clipboard()->setText(text, QClipboard::Clipboard);
++        });
++        menu.addAction(QStringLiteral("Seleziona comando e copia testo"), this, [this, row, lastColumn, line] {
++            selectCells(row, 0, lastColumn);
++            QApplication::clipboard()->setText(TerminalContext::cleanCommand(line), QClipboard::Clipboard);
++        });
++    }
++
+     if (!actions.isEmpty())
+     {
+         menu.addSeparator();
+@@ -259,11 +552,106 @@
+     }
+ }
+ 
+-bool TermWidget::eventFilter(QObject * /*obj*/, QEvent * ev)
++bool TermWidget::eventFilter(QObject * obj, QEvent * ev)
+ {
++    if (ev->type() == QEvent::MouseButtonRelease
++        && static_cast<QMouseEvent*>(ev)->button() == Qt::RightButton
++        && m_rightPressHandled)
++    {
++        // keep the release away from a program that tracks the mouse (tmux)
++        m_rightPressHandled = false;
++        return true;
++    }
++    if (ev->type() == QEvent::KeyPress && obj && obj->inherits("Konsole::TerminalDisplay")
++        && !impl()->tmuxSession().isEmpty() && !Properties::Instance()->tmuxMouse)
++    {
++        // Shift+PageUp/PageDown: a page of tmux's history, like the wheel
++        auto *key = static_cast<QKeyEvent*>(ev);
++        if (key->modifiers() == Qt::ShiftModifier && (key->key() == Qt::Key_PageUp || key->key() == Qt::Key_PageDown))
++        {
++            const int page = qMax(1, impl()->screenLinesCount() - 1);
++            const bool up = key->key() == Qt::Key_PageUp;
++            if (!m_tmuxBar || !m_tmuxBar->scrollBy(up ? page : -page))
++                TmuxManager::instance()->scrollProgram(impl()->tmuxSession(), up ? page : -page, 0, 0, true);
++            return true;
++        }
++    }
++    if (ev->type() == QEvent::KeyPress && m_tmuxBar && m_tmuxBar->scrollbackOpen())
++    {
++        // typing brings the cursor back to the prompt: the view of the history goes away
++        // before the key reaches the shell
++        auto *key = static_cast<QKeyEvent*>(ev);
++        const bool modifierOnly = key->key() == Qt::Key_Shift || key->key() == Qt::Key_Control
++                                  || key->key() == Qt::Key_Alt || key->key() == Qt::Key_Meta
++                                  || key->key() == Qt::Key_AltGr || key->key() == Qt::Key_CapsLock;
++        const bool shortcut = (key->modifiers() & Qt::ControlModifier) && (key->modifiers() & Qt::ShiftModifier);
++        if (!modifierOnly && !shortcut)
++            m_tmuxBar->closeScrollback();
++    }
++    if (ev->type() == QEvent::FontChange && m_tmuxBar && obj && obj->inherits("Konsole::TerminalDisplay"))
++        m_tmuxBar->closeScrollback(); // zoom: the view has the old grid
++    if (ev->type() == QEvent::Wheel && obj && obj->inherits("Konsole::TerminalDisplay")
++        && (static_cast<QWheelEvent*>(ev)->modifiers() & Qt::ControlModifier))
++    {
++        // Ctrl+wheel zooms, like Ctrl++ and Ctrl+-
++        const int delta = static_cast<QWheelEvent*>(ev)->angleDelta().y();
++        if (delta > 0)
++            impl()->zoomIn();
++        else if (delta < 0)
++            impl()->zoomOut();
++        return true;
++    }
++    if (ev->type() == QEvent::Wheel && obj && obj->inherits("Konsole::TerminalDisplay")
++        && !impl()->tmuxSession().isEmpty() && !Properties::Instance()->tmuxMouse)
++    {
++        // The history is tmux's, and tmux gets no mouse (to keep the native
++        // selection): the wheel drives the view of the history, or the program that scrolls by itself.
++        auto *wheel = static_cast<QWheelEvent*>(ev);
++        m_wheelDelta += wheel->angleDelta().y();
++        if (m_tmuxBar && !m_tmuxBar->programOwnsScroll())
++        {
++            // 3 lines for a notch, and the fractions of a notch of fine wheels add up
++            const int lines = m_wheelDelta / 40;
++            m_wheelDelta -= lines * 40;
++            m_tmuxBar->scrollBy(lines);
++        }
++        else
++        {
++            const int notches = m_wheelDelta / 120;
++            if (notches != 0)
++            {
++                m_wheelDelta -= notches * 120;
++                int row = 0, column = 0;
++                impl()->cellAt(impl()->mapFromGlobal(wheel->globalPosition().toPoint()), row, column);
++                TmuxManager::instance()->scrollProgram(impl()->tmuxSession(), notches * 3, column, row);
++                if (m_tmuxBar)
++                    m_tmuxBar->refresh();
++            }
++        }
++        return true;
++    }
+     if (ev->type() == QEvent::MouseButtonPress)
+     {
+         QMouseEvent *mev = static_cast<QMouseEvent*>(ev);
++        if (mev->button() == Qt::RightButton && obj && obj->isWidgetType()
++            && obj->inherits("Konsole::TerminalDisplay"))
++        {
++            // The terminal itself hands a right click to the running program when
++            // that tracks the mouse. The menu must open anyway, also on the click
++            // that gives the focus to the window.
++            m_rightPressHandled = true;
++            const QPoint pos = static_cast<QWidget*>(obj)->mapTo(impl(), mev->position().toPoint());
++            impl()->setFocus(Qt::MouseFocusReason);
++            emit termGetFocus(this);
++            // opened right here, as the terminal does: the click that closes the
++            // menu must not be taken for the end of this one
++            if (Properties::Instance()->swapMouseButtons2and3)
++                impl()->pasteSelection();
++            else
++                impl()->customContextMenuCall(pos);
++            m_rightPressHandled = false;
++            return true;
++        }
+         if (mev->button() == Qt::MiddleButton)
+         {
+             if(Properties::Instance()->swapMouseButtons2and3)
+@@ -287,6 +675,403 @@
+     return false;
+ }
+ 
++namespace {
++// ends what capture-pane wrote; what follows is the state of the pane
++const QByteArray STATE_MARK = QByteArrayLiteral("\x01QTSTATE ");
++const char STATE_FORMAT[] = "#{alternate_on} #{?mouse_any_flag,#{mouse_sgr_flag},0} #{pane_height} #{pane_in_mode}"
++                            " #{history_size} #{?scroll_position,#{scroll_position},0}";
++}
++
++TmuxScrollBar::TmuxScrollBar(const QString &session, TermWidgetImpl *live, QWidget *host)
++    : QScrollBar(Qt::Vertical, host)
++    , m_session(session)
++    , m_live(live)
++    , m_host(host)
++{
++    setFocusPolicy(Qt::NoFocus);
++    setRange(0, 0);
++    m_timer.setSingleShot(true);
++    connect(&m_timer, &QTimer::timeout, this, &TmuxScrollBar::poll);
++    m_readyTimer.setInterval(5);
++    connect(&m_readyTimer, &QTimer::timeout, this, &TmuxScrollBar::waitReady);
++    connect(this, &QScrollBar::valueChanged, this, [this](int value) {
++        if (!m_internal)
++            goTo(value);
++    });
++}
++
++TmuxScrollBar::~TmuxScrollBar()
++{
++    closeScrollback();
++}
++
++void TmuxScrollBar::refresh()
++{
++    if (!isVisible() || m_view || m_capturing)
++        return;
++    m_dirty = true;
++    if (!m_timer.isActive() && !m_process)
++        m_timer.start(100);
++}
++
++void TmuxScrollBar::showEvent(QShowEvent *event)
++{
++    QScrollBar::showEvent(event);
++    refresh();
++}
++
++// The bar counts from the oldest line, like the view does: the value is the line at the top.
++void TmuxScrollBar::goTo(int value)
++{
++    if (m_view)
++    {
++        if (m_ready)
++            m_viewBar->setValue(value);
++        else
++            m_target = value;
++        return;
++    }
++    if (value >= maximum())
++    {
++        // back at the bottom, before the view came up
++        m_target = -1;
++        return;
++    }
++    m_target = value;
++    if (m_capturing)
++        return;
++    // the history and the state of the pane, in one call: a program that took the screen a moment ago
++    // must not get a view of the history over it
++    if (m_process)
++    {
++        m_process->disconnect(this);
++        m_process->kill();
++        m_process->deleteLater();
++        m_process = nullptr;
++    }
++    const QString target = QLatin1Char('=') + m_session + QLatin1Char(':');
++    m_process = TmuxManager::instance()->start(
++        {QStringLiteral("capture-pane"), QStringLiteral("-p"), QStringLiteral("-e"), QStringLiteral("-t"), target,
++         QStringLiteral("-S"), QStringLiteral("-"), QStringLiteral("-E"), QStringLiteral("-"), QStringLiteral(";"),
++         QStringLiteral("display-message"), QStringLiteral("-p"), QStringLiteral("-t"), target,
++         QString::fromLatin1(STATE_MARK) + QLatin1String(STATE_FORMAT)}, this);
++    if (!m_process)
++    {
++        m_target = -1;
++        return;
++    }
++    m_capturing = true;
++    QProcess *process = m_process;
++    connect(process, &QProcess::finished, this, [this, process] {
++        if (process == m_process)
++            captureFinished();
++    });
++}
++
++bool TmuxScrollBar::scrollBy(int lines)
++{
++    if (programOwnsScroll())
++        return false;
++    if (lines == 0)
++        return true;
++    const int base = m_view && m_ready ? m_viewBar->value() : (m_target >= 0 ? m_target : value());
++    goTo(qBound(0, base - lines, qMax(maximum(), m_history)));
++    return true;
++}
++
++void TmuxScrollBar::poll()
++{
++    if (m_process || m_view || m_capturing || !isVisible())
++        return;
++    m_dirty = false;
++    const QString target = QLatin1Char('=') + m_session + QLatin1Char(':');
++    m_process = TmuxManager::instance()->start(
++        {QStringLiteral("display-message"), QStringLiteral("-p"), QStringLiteral("-t"), target,
++         QLatin1String(STATE_FORMAT)}, this);
++    if (!m_process)
++        return;
++    QProcess *process = m_process;
++    connect(process, &QProcess::finished, this, [this, process] {
++        if (process == m_process)
++            pollFinished();
++    });
++}
++
++void TmuxScrollBar::pollFinished()
++{
++    const QStringList f = QString::fromUtf8(m_process->readAllStandardOutput()).trimmed().split(QLatin1Char(' '));
++    m_process->deleteLater();
++    m_process = nullptr;
++
++    if (f.size() == 6 && !m_view && !m_capturing)
++    {
++        m_alternate = f.at(0) == QLatin1String("1");
++        m_mouseTracked = f.at(1) == QLatin1String("1");
++        m_inMode = f.at(3) == QLatin1String("1");
++        m_history = f.at(4).toInt();
++        m_offset = qMin(f.at(5).toInt(), m_history);
++
++        m_internal = true;
++        setRange(0, programOwnsScroll() ? 0 : m_history);
++        setPageStep(qMax(1, f.at(2).toInt()));
++        setSingleStep(1);
++        // not under the hand that drags it
++        if (!isSliderDown() && m_target < 0)
++            setValue(programOwnsScroll() ? 0 : m_history - m_offset);
++        m_internal = false;
++    }
++    if (m_dirty && !m_timer.isActive())
++        m_timer.start(100);
++}
++
++void TmuxScrollBar::captureFinished()
++{
++    const QByteArray out = m_process->readAllStandardOutput();
++    m_process->deleteLater();
++    m_process = nullptr;
++    m_capturing = false;
++
++    const qsizetype mark = out.lastIndexOf(STATE_MARK);
++    if (mark < 0)
++    {
++        m_target = -1;
++        return;
++    }
++    const QList<QByteArray> f = out.mid(mark + STATE_MARK.size()).trimmed().split(' ');
++    if (f.size() != 6)
++    {
++        m_target = -1;
++        return;
++    }
++    m_alternate = f.at(0) == "1";
++    m_mouseTracked = f.at(1) == "1";
++    m_inMode = f.at(3) == "1";
++    const int rows = f.at(2).toInt();
++    if (programOwnsScroll() || m_target < 0)
++    {
++        m_target = -1;
++        refresh();
++        return;
++    }
++
++    QByteArray text = out.left(mark);
++    if (text.endsWith('\n'))
++        text.chop(1); // its last line must not push one more into the history
++    const int history = int(text.count('\n')) + 1 - rows;
++    if (history <= 0 || rows <= 0)
++    {
++        m_target = -1;
++        return;
++    }
++    openView(text, history, rows);
++}
++
++void TmuxScrollBar::openView(const QByteArray &text, int history, int rows)
++{
++    // the live terminal and the view must have the same grid, or the lines would wrap differently
++    QWidget *liveDisplay = terminalDisplayOf(m_live);
++    if (!liveDisplay)
++    {
++        m_target = -1;
++        return;
++    }
++    m_view = new TermWidgetImpl(m_live, m_host);
++    m_view->setFocusPolicy(Qt::NoFocus); // the keys stay with the live terminal, which closes the view
++    m_view->setTerminalFont(liveDisplay->font());
++    m_view->setHistorySize(history + rows);
++    m_view->setTerminalSizeHint(false);
++    m_view->setGeometry(m_live->geometry());
++    m_view->show();
++    m_view->lower(); // out of sight until it is complete
++
++    if (QWidget *viewDisplay = terminalDisplayOf(m_view))
++    {
++        viewDisplay->setFocusPolicy(Qt::NoFocus);
++        viewDisplay->installEventFilter(this);
++        const auto bars = viewDisplay->findChildren<QScrollBar*>(QString(), Qt::FindDirectChildrenOnly);
++        if (!bars.isEmpty())
++            m_viewBar = bars.first();
++    }
++    m_viewHistory = history;
++    m_ready = false;
++    m_fed = 0;
++    // hidden cursor, and every line ends as a terminal wants it
++    m_text = QByteArrayLiteral("\x1b[0m\x1b[?25l") + text;
++    m_text.replace('\n', "\r\n");
++
++    // the grid of the view is known once its first resize was handled
++    QTimer::singleShot(0, this, &TmuxScrollBar::startFeeding);
++}
++
++void TmuxScrollBar::startFeeding()
++{
++    if (!m_view)
++        return;
++    if (!m_viewBar || m_view->screenLinesCount() != m_live->screenLinesCount()
++        || m_view->screenColumnsCount() != m_live->screenColumnsCount())
++    {
++        closeScrollback();
++        return;
++    }
++    m_view->startTerminalTeletype();
++    const int fd = m_view->getPtySlaveFd();
++    if (fd < 0)
++    {
++        closeScrollback();
++        return;
++    }
++    // The terminal reads what is written here in this same thread: a write that blocks would never end.
++    ::fcntl(fd, F_SETFL, ::fcntl(fd, F_GETFL) | O_NONBLOCK);
++    m_feeder = new QSocketNotifier(fd, QSocketNotifier::Write, this);
++    m_feeder->setEnabled(false);
++    connect(m_feeder, &QSocketNotifier::activated, this, &TmuxScrollBar::feed);
++    feed();
++}
++
++void TmuxScrollBar::feed()
++{
++    if (!m_view || !m_feeder)
++        return;
++    const int fd = int(m_feeder->socket());
++    while (m_fed < m_text.size())
++    {
++        const ssize_t n = ::write(fd, m_text.constData() + m_fed, size_t(qMin<qsizetype>(65536, m_text.size() - m_fed)));
++        if (n > 0)
++        {
++            m_fed += n;
++            continue;
++        }
++        if (n < 0 && errno == EINTR)
++            continue;
++        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
++        {
++            m_feeder->setEnabled(true); // the terminal has to read first
++            return;
++        }
++        closeScrollback();
++        return;
++    }
++    m_feeder->setEnabled(false);
++    m_text.clear();
++    m_readyTicks = 0;
++    m_readyTimer.start();
++}
++
++// The view is complete when its scroll range is the history it was given.
++void TmuxScrollBar::waitReady()
++{
++    if (!m_view || !m_viewBar)
++    {
++        m_readyTimer.stop();
++        return;
++    }
++    if (m_viewBar->maximum() < m_viewHistory && ++m_readyTicks < 1000)
++        return;
++    m_readyTimer.stop();
++    if (m_viewBar->maximum() != m_viewHistory)
++    {
++        closeScrollback();
++        return;
++    }
++
++    const int target = qBound(0, m_target, m_viewHistory);
++    m_target = -1;
++    m_internal = true;
++    setRange(0, m_viewHistory);
++    setPageStep(qMax(1, m_view->screenLinesCount()));
++    m_internal = false;
++    if (target >= m_viewHistory)
++    {
++        closeScrollback();
++        return;
++    }
++    m_viewBar->setValue(target);
++    m_ready = true;
++    connect(m_viewBar, &QScrollBar::valueChanged, this, [this](int value) {
++        if (!m_ready)
++            return;
++        m_internal = true;
++        setValue(value);
++        m_internal = false;
++        if (value >= m_viewHistory)
++            closeScrollback();
++    });
++    m_internal = true;
++    setValue(target);
++    m_internal = false;
++    m_view->raise();
++}
++
++void TmuxScrollBar::closeScrollback()
++{
++    const bool wasOpen = m_view || m_capturing;
++    m_readyTimer.stop();
++    m_ready = false;
++    m_target = -1;
++    m_capturing = false;
++    if (m_process)
++    {
++        m_process->disconnect(this);
++        m_process->kill();
++        m_process->deleteLater();
++        m_process = nullptr;
++    }
++    delete m_feeder;
++    m_feeder = nullptr;
++    m_text.clear();
++    if (m_view)
++    {
++        m_viewBar = nullptr;
++        m_view->hide();
++        m_view->deleteLater();
++        m_view = nullptr;
++    }
++    if (wasOpen)
++    {
++        // the live terminal is at the bottom: the bar too, until tmux says otherwise
++        m_internal = true;
++        setValue(maximum());
++        m_internal = false;
++        refresh();
++    }
++}
++
++bool TmuxScrollBar::copyScrollbackSelection()
++{
++    if (!m_view || m_view->selectedText().isEmpty())
++        return false;
++    m_view->copyClipboard();
++    return true;
++}
++
++bool TmuxScrollBar::eventFilter(QObject *obj, QEvent *event)
++{
++    // Ctrl+wheel zooms the live terminal; the view has a font of its own that would go out of step
++    if (event->type() == QEvent::Wheel && (static_cast<QWheelEvent*>(event)->modifiers() & Qt::ControlModifier))
++        return true;
++    if (m_view && (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::MouseButtonRelease))
++    {
++        auto *mouse = static_cast<QMouseEvent*>(event);
++        const bool swapped = Properties::Instance()->swapMouseButtons2and3;
++        const bool menuButton = mouse->button() == (swapped ? Qt::MiddleButton : Qt::RightButton);
++        const bool pasteButton = mouse->button() == (swapped ? Qt::RightButton : Qt::MiddleButton);
++        if (menuButton || pasteButton)
++        {
++            if (event->type() == QEvent::MouseButtonPress)
++            {
++                const QPoint pos = static_cast<QWidget*>(obj)->mapTo(m_view, mouse->position().toPoint());
++                m_live->setFocus(Qt::MouseFocusReason);
++                if (menuButton)
++                    m_view->customContextMenuCall(pos); // opened right here, as the live terminal does
++                else
++                    m_live->pasteSelection();
++            }
++            return true; // the view has no program to give a click to
++        }
++    }
++    return QScrollBar::eventFilter(obj, event);
++}
++
+ TermWidget::TermWidget(TerminalConfig &cfg, QWidget *parent)
+     : QWidget(parent)
+     , DBusAddressable(QStringLiteral("/terminals"))
+@@ -303,7 +1088,17 @@
+ 
+     setLayout(m_layout);
+ 
+-    m_layout->addWidget(m_term);
++    m_row = new QHBoxLayout;
++    m_row->setContentsMargins(0, 0, 0, 0);
++    m_row->setSpacing(0);
++    m_layout->addLayout(m_row);
++    m_row->addWidget(m_term);
++    if (!m_term->tmuxSession().isEmpty())
++    {
++        m_tmuxBar = new TmuxScrollBar(m_term->tmuxSession(), m_term, this);
++        m_row->addWidget(m_tmuxBar);
++        connect(m_term, &QTermWidget::receivedData, m_tmuxBar, &TmuxScrollBar::refresh);
++    }
+     const auto objs = m_term->children();
+ 
+     for (QObject *o : objs)
+@@ -332,6 +1127,30 @@
+         m_layout->setContentsMargins(0, 0, 0, 0);
+ 
+     m_term->propertiesChanged();
++
++    if (m_tmuxBar)
++    {
++        m_tmuxBar->closeScrollback();
++        // same place as the scroll bar of the terminal would be
++        const int position = Properties::Instance()->scrollBarPos;
++        m_row->removeWidget(m_tmuxBar);
++        m_row->insertWidget(position == 1 ? 0 : 1, m_tmuxBar);
++        m_tmuxBar->setVisible(position != 0);
++        m_tmuxBar->refresh();
++    }
++}
++
++void TermWidget::resizeEvent(QResizeEvent *event)
++{
++    QWidget::resizeEvent(event);
++    if (m_tmuxBar)
++        m_tmuxBar->closeScrollback(); // the view has the old grid
++}
++
++void TermWidget::copySelection()
++{
++    if (!m_tmuxBar || !m_tmuxBar->copyScrollbackSelection())
++        m_term->copyClipboard();
+ }
+ 
+ void TermWidget::term_termGetFocus()
+diff -ruN -x .git orig/src/termwidget.h src/src/termwidget.h
+--- orig/src/termwidget.h	2026-11-05 12:31:00.072065907 +0100
++++ src/src/termwidget.h	2026-11-11 00:00:51.749059295 +0100
+@@ -31,6 +31,14 @@
+ struct ca_context;
+ #endif
+ 
++#include <QScrollBar>
++#include <QTimer>
++#include <QUrl>
++
++class QHBoxLayout;
++class QProcess;
++class QSocketNotifier;
++
+ class TermWidgetImpl : public QTermWidget
+ {
+     Q_OBJECT
+@@ -40,6 +48,9 @@
+     public:
+ 
+         TermWidgetImpl(TerminalConfig &cfg, QWidget * parent=nullptr);
++        //! A read-only view of the history of \p live (see TmuxScrollBar): no program runs in it, and
++        //! what the menu does to the terminal (paste, directory) is done to \p live
++        TermWidgetImpl(TermWidgetImpl *live, QWidget *parent);
+         virtual ~TermWidgetImpl();
+         void propertiesChanged();
+ 
+@@ -47,6 +58,18 @@
+             return m_hasCommand;
+         }
+ 
++        //! tmux session shown by this terminal (empty if tmux is not used)
++        QString tmuxSession() const {
++            return m_tmuxSession;
++        }
++        //! Working directory of what runs in the terminal. Under tmux
++        //! workingDirectory() would be the one of the tmux client.
++        QString currentDirectory();
++        //! A command other than the shell is running (or a command was given)
++        bool hasForegroundJob();
++        //! Clears the screen and the scrollback, also under tmux
++        void clearTerminal();
++
+     signals:
+         void renameSession();
+         void removeCurrentSession();
+@@ -56,31 +79,129 @@
+         void zoomOut();
+         void zoomReset();
+         void customContextMenuCall(const QPoint & pos);
++        //! Cell (0-based) under \p pos, in the coordinates of this widget
++        bool cellAt(const QPoint &pos, int &row, int &column) const;
+ 
+     private slots:
+         void activateUrl(const QUrl& url, bool fromContextMenu);
+         void bell();
+ 
+     private:
++        // what was under the pointer when the context menu opened
++        struct ContextTarget
++        {
++            bool hasCell = false;
++            int row = 0;         // row on the screen
++            int column = 0;
++            int absoluteRow = 0; // row counted from the oldest line of the history
++            QString line;
++            QUrl url;            // link under the pointer
++            QString path;        // absolute path under the pointer
++        };
++
++        ContextTarget contextTargetAt(const QPoint &pos);
++        QString screenLine(int absoluteRow) const;
++        void selectCells(int absoluteRow, int firstColumn, int lastColumn);
++        void openUrlWithBrave(const QUrl &url);
++        void openInFileManager(const QString &path);
++        void pasteWithoutNewlines();
++
+         bool m_hasCommand;
++        QString m_tmuxSession;
++        TermWidgetImpl *m_live = nullptr; // set in a view of the history
+ #ifdef HAVE_LIBCANBERRA
+         ca_context* libcanberra_context;
+ #endif
+ };
+ 
+ 
++//! Scroll bar of a tmux pane. The history is tmux's, and tmux redraws over the terminal widget, so
++//! the widget has none of its own. When the user scrolls back, the history is read once
++//! (capture-pane) into a read-only terminal view laid over the live one, and the bar drives that
++//! view: no tmux call while scrolling, tmux never enters its copy mode. Back at the bottom, the
++//! view goes away.
++class TmuxScrollBar : public QScrollBar
++{
++    Q_OBJECT
++
++public:
++    TmuxScrollBar(const QString &session, TermWidgetImpl *live, QWidget *host);
++    ~TmuxScrollBar() override;
++
++    //! Scrolls \p lines back in the history (> 0) or forward (< 0). False if the program in the pane
++    //! scrolls by itself (alternate screen, mouse tracking): the caller sends the wheel to it.
++    bool scrollBy(int lines);
++    //! Reads the state of the pane (soon, and not more than every 100 ms)
++    void refresh();
++    //! A full screen program (alternate screen) or one that tracks the mouse owns the scrolling
++    bool programOwnsScroll() const { return !m_inMode && (m_alternate || m_mouseTracked); }
++
++    bool scrollbackOpen() const { return m_view != nullptr; }
++    //! Removes the view of the history (and what is being read for it)
++    void closeScrollback();
++    //! Puts the selection made in the view on the clipboard. False if there is none.
++    bool copyScrollbackSelection();
++
++protected:
++    void showEvent(QShowEvent *event) override;
++    bool eventFilter(QObject *obj, QEvent *event) override;
++
++private:
++    void goTo(int value);
++    void poll();
++    void pollFinished();
++    void captureFinished();
++    void openView(const QByteArray &text, int history, int rows);
++    void startFeeding();
++    void feed();
++    void waitReady();
++
++    QString m_session;
++    TermWidgetImpl *m_live;
++    QWidget *m_host;
++    QTimer m_timer;
++    QTimer m_readyTimer;
++    QProcess *m_process = nullptr; // state poll or capture, one at a time
++    bool m_capturing = false;
++    bool m_dirty = false;
++    bool m_internal = false;
++    int m_target = -1;             // where the view must be put, as a bar value
++    int m_history = 0;
++    int m_offset = 0;
++    bool m_inMode = false;
++    bool m_alternate = false;
++    bool m_mouseTracked = false;
++
++    TermWidgetImpl *m_view = nullptr;
++    QScrollBar *m_viewBar = nullptr;
++    QSocketNotifier *m_feeder = nullptr;
++    QByteArray m_text;
++    qsizetype m_fed = 0;
++    int m_viewHistory = 0;         // lines above the screen in the view, when it is complete
++    int m_readyTicks = 0;
++    bool m_ready = false;
++};
++
+ class TermWidget : public QWidget, public DBusAddressable
+ {
+     Q_OBJECT
+ 
+     TermWidgetImpl * m_term;
++    bool m_rightPressHandled = false;
++    int m_wheelDelta = 0;
+     QVBoxLayout * m_layout;
++    QHBoxLayout * m_row = nullptr;
++    TmuxScrollBar * m_tmuxBar = nullptr;
+     QColor m_border;
+ 
+     public:
+         TermWidget(TerminalConfig &cfg, QWidget * parent=nullptr);
+ 
+         void propertiesChanged();
++        //! scroll bar of the tmux pane, null without tmux
++        TmuxScrollBar *tmuxScrollBar() const { return m_tmuxBar; }
++        //! Copies the selection: of the history view if it is open and has one, else of the terminal
++        void copySelection();
+         QStringList availableKeyBindings() { return m_term->availableKeyBindings(); }
+ 
+         TermWidgetImpl * impl() { return m_term; }
+@@ -113,6 +234,7 @@
+             return false;
+         }
+         void paintEvent (QPaintEvent * event) override;
++        void resizeEvent(QResizeEvent *event) override;
+ 
+     private slots:
+         void term_termGetFocus();
+diff -ruN -x .git orig/src/termwidgetholder.cpp src/src/termwidgetholder.cpp
+--- orig/src/termwidgetholder.cpp	2026-11-05 12:31:00.072075626 +0100
++++ src/src/termwidgetholder.cpp	2026-11-11 00:00:51.749076959 +0100
+@@ -17,6 +17,7 @@
+  ***************************************************************************/
+ 
+ #include <QGridLayout>
++#include <QJsonArray>
+ #include <QSplitter>
+ #include <QInputDialog>
+ 
+@@ -256,7 +257,7 @@
+ 
+ void TermWidgetHolder::clearActiveTerminal()
+ {
+-    currentTerminal()->impl()->clear();
++    currentTerminal()->impl()->clearTerminal();
+ }
+ 
+ void TermWidgetHolder::propertiesChanged()
+@@ -342,7 +343,7 @@
+     s->setFocusPolicy(Qt::NoFocus);
+     s->insertWidget(0, term);
+ 
+-    cfg.provideCurrentDirectory(term->impl()->workingDirectory());
++    cfg.provideCurrentDirectory(term->impl()->currentDirectory());
+ 
+     TermWidget * w = newTerm(cfg);
+     s->insertWidget(1, w);
+@@ -409,6 +410,83 @@
+         emit termTitleChanged(std::move(title), std::move(icon));
+ }
+ 
++static QJsonObject widgetLayout(QWidget *w)
++{
++    QJsonObject node;
++    if (auto *term = qobject_cast<TermWidget*>(w))
++    {
++        node[QStringLiteral("session")] = term->impl()->tmuxSession();
++    }
++    else if (auto *splitter = qobject_cast<QSplitter*>(w))
++    {
++        QJsonArray children, sizes;
++        for (int i = 0; i < splitter->count(); ++i)
++            children.append(widgetLayout(splitter->widget(i)));
++        const auto list = splitter->sizes();
++        for (int size : list)
++            sizes.append(size);
++        node[QStringLiteral("o")] = int(splitter->orientation());
++        node[QStringLiteral("sizes")] = sizes;
++        node[QStringLiteral("c")] = children;
++    }
++    return node;
++}
++
++QJsonObject TermWidgetHolder::layout() const
++{
++    const auto splitters = findChildren<QSplitter*>(QString(), Qt::FindDirectChildrenOnly);
++    return splitters.isEmpty() ? QJsonObject() : widgetLayout(splitters.first());
++}
++
++void TermWidgetHolder::fillSplitter(QSplitter *target, const QJsonObject &node, TermWidget *&reuse)
++{
++    target->setOrientation(Qt::Orientation(node.value(QStringLiteral("o")).toInt(Qt::Horizontal)));
++    const QJsonArray children = node.value(QStringLiteral("c")).toArray();
++    for (const QJsonValue &value : children)
++    {
++        const QJsonObject child = value.toObject();
++        if (child.contains(QStringLiteral("session")))
++        {
++            TermWidget *term = reuse;
++            reuse = nullptr;
++            if (!term)
++            {
++                TerminalConfig cfg;
++                cfg.setTmuxSession(child.value(QStringLiteral("session")).toString());
++                term = newTerm(cfg);
++            }
++            target->addWidget(term);
++        }
++        else
++        {
++            QSplitter *sub = new QSplitter(this);
++            sub->setFocusPolicy(Qt::NoFocus);
++            target->addWidget(sub);
++            fillSplitter(sub, child, reuse);
++        }
++    }
++    QList<int> sizes;
++    const QJsonArray saved = node.value(QStringLiteral("sizes")).toArray();
++    for (const QJsonValue &size : saved)
++        sizes << size.toInt();
++    if (sizes.size() == target->count())
++        target->setSizes(sizes);
++}
++
++void TermWidgetHolder::applyLayout(const QJsonObject &root)
++{
++    const auto splitters = findChildren<QSplitter*>(QString(), Qt::FindDirectChildrenOnly);
++    if (splitters.isEmpty() || !root.contains(QStringLiteral("c")))
++        return;
++    TermWidget *first = m_currentTerm;
++    first->setParent(this); // out of the splitter, which is filled again
++    first->hide();
++    TermWidget *reuse = first;
++    fillSplitter(splitters.first(), root, reuse);
++    first->show();
++    first->setFocus(Qt::OtherFocusReason);
++}
++
+ bool TermWidgetHolder::hasRunningProcess() const
+ {
+     const QList<TermWidget*> list = findChildren<TermWidget*>();
+@@ -416,7 +494,7 @@
+     {
+         if (auto impl = term->impl())
+         {
+-            if (impl->hasCommand() || impl->getForegroundProcessId() != impl->getShellPID())
++            if (impl->hasForegroundJob())
+             {
+                 return true;
+             }
+diff -ruN -x .git orig/src/termwidgetholder.h src/src/termwidgetholder.h
+--- orig/src/termwidgetholder.h	2026-11-05 12:31:00.072089923 +0100
++++ src/src/termwidgetholder.h	2026-11-11 00:00:51.749090414 +0100
+@@ -19,6 +19,7 @@
+ #ifndef TERMWIDGETHOLDER_H
+ #define TERMWIDGETHOLDER_H
+ 
++#include <QJsonObject>
+ #include <QWidget>
+ #include "termwidget.h"
+ #include "terminalconfig.h"
+@@ -67,6 +68,11 @@
+ 
+         bool hasRunningProcess() const;
+ 
++        //! The splits of this tab with the tmux session of each terminal
++        QJsonObject layout() const;
++        //! Rebuilds the splits described by layout(); the first terminal must show the first session
++        void applyLayout(const QJsonObject &root);
++
+         #ifdef HAVE_QDBUS
+         QDBusObjectPath getActiveTerminal();
+         QList<QDBusObjectPath> getTerminals();
+@@ -98,6 +104,7 @@
+ 
+         void split(TermWidget * term, Qt::Orientation orientation);
+         TermWidget * newTerm(TerminalConfig &cfg);
++        void fillSplitter(QSplitter *target, const QJsonObject &node, TermWidget *&reuse);
+ 
+     private slots:
+         void setCurrentTerminal(TermWidget* term);
+diff -ruN -x .git orig/src/tmuxmanager.cpp src/src/tmuxmanager.cpp
+--- orig/src/tmuxmanager.cpp	1970-01-01 01:00:00.000000000 +0100
++++ src/src/tmuxmanager.cpp	2026-11-11 00:00:51.749100964 +0100
+@@ -0,0 +1,442 @@
++/***************************************************************************
++ *   This program is free software; you can redistribute it and/or modify  *
++ *   it under the terms of the GNU General Public License as published by  *
++ *   the Free Software Foundation; either version 2 of the License, or     *
++ *   (at your option) any later version.                                   *
++ *                                                                         *
++ *   This program is distributed in the hope that it will be useful,       *
++ *   but WITHOUT ANY WARRANTY; without even the implied warranty of        *
++ *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         *
++ *   GNU General Public License for more details.                          *
++ *                                                                         *
++ *   You should have received a copy of the GNU General Public License     *
++ *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
++ ***************************************************************************/
++
++#include "tmuxmanager.h"
++
++#include "properties.h"
++
++#include <QDir>
++#include <QFile>
++#include <QFileInfo>
++#include <QJsonDocument>
++#include <QProcess>
++#include <QProcessEnvironment>
++#include <QStandardPaths>
++#include <QUuid>
++
++static const char SOCKET_NAME[] = "qterminal";
++static const char BOOT_SESSION[] = "qterminal-boot";
++static const char RESURRECT_REPO[] = "https://github.com/tmux-plugins/tmux-resurrect.git";
++
++TmuxManager *TmuxManager::instance()
++{
++    static TmuxManager *manager = new TmuxManager;
++    return manager;
++}
++
++TmuxManager::TmuxManager()
++    : m_tmux(QStandardPaths::findExecutable(QStringLiteral("tmux")))
++{
++    connect(&m_saveTimer, &QTimer::timeout, this, [this] { saveNow(); });
++}
++
++bool TmuxManager::isAvailable() const
++{
++    return !m_tmux.isEmpty();
++}
++
++bool TmuxManager::isActive() const
++{
++    return isAvailable() && !m_disabled && Properties::Instance()->tmuxEnabled;
++}
++
++QString TmuxManager::dataDir() const
++{
++    return QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + QStringLiteral("/tmux");
++}
++
++QString TmuxManager::configPath() const
++{
++    return dataDir() + QStringLiteral("/qterminal.conf");
++}
++
++QString TmuxManager::findPlugin(const QString &name) const
++{
++    const QString home = QDir::homePath();
++    const QString xdgConfig = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation);
++    const QStringList candidates = {
++        dataDir() + QStringLiteral("/plugins/") + name,
++        home + QStringLiteral("/.tmux/plugins/") + name,
++        xdgConfig + QStringLiteral("/tmux/plugins/") + name,
++        QStringLiteral("/usr/share/") + name,
++        QStringLiteral("/usr/share/tmux-plugins/") + name,
++    };
++    for (const QString &dir : candidates)
++    {
++        if (QFile::exists(dir + QStringLiteral("/resurrect.tmux")))
++            return dir;
++    }
++    return QString();
++}
++
++bool TmuxManager::hasResurrect() const
++{
++    return !findPlugin(QStringLiteral("tmux-resurrect")).isEmpty();
++}
++
++void TmuxManager::prepare(QProcess &process) const
++{
++    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
++    env.remove(QStringLiteral("TMUX"));
++    env.remove(QStringLiteral("TMUX_PANE"));
++    process.setProcessEnvironment(env);
++    process.setProcessChannelMode(QProcess::SeparateChannels);
++}
++
++QStringList TmuxManager::serverArguments() const
++{
++    return {QStringLiteral("-L"), QLatin1String(SOCKET_NAME), QStringLiteral("-f"), configPath()};
++}
++
++QProcess *TmuxManager::start(const QStringList &args, QObject *parent) const
++{
++    if (!isAvailable())
++        return nullptr;
++    auto *process = new QProcess(parent);
++    prepare(*process);
++    process->start(m_tmux, serverArguments() + args);
++    return process;
++}
++
++bool TmuxManager::run(const QStringList &args, QString *out, int timeoutMs) const
++{
++    if (!isAvailable())
++        return false;
++    QProcess process;
++    prepare(process);
++    process.start(m_tmux, serverArguments() + args);
++    if (!process.waitForFinished(timeoutMs))
++    {
++        process.kill();
++        process.waitForFinished(1000);
++        return false;
++    }
++    if (out)
++        *out = QString::fromUtf8(process.readAllStandardOutput());
++    return process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0;
++}
++
++bool TmuxManager::serverRunning() const
++{
++    return run({QStringLiteral("list-sessions")});
++}
++
++static QString quoted(const QString &path)
++{
++    // tmux single quotes cannot be escaped; such a path is not usable
++    return path.contains(QLatin1Char('\'')) ? QString() : QLatin1Char('\'') + path + QLatin1Char('\'');
++}
++
++void TmuxManager::writeConfig() const
++{
++    QDir().mkpath(dataDir() + QStringLiteral("/resurrect"));
++
++    QStringList conf;
++    conf << QStringLiteral("# Generated by QTerminal at every start. Edit ~/.tmux.conf instead.");
++    // defaults first, so that the user's own configuration can override them
++    conf << QStringLiteral("set -g status off")           // the tabs are QTerminal's own
++         << QStringLiteral("set -g set-titles on")        // the pane title becomes the tab title
++         << QStringLiteral("set -g set-titles-string '#T'")
++         << QStringLiteral("set -g history-limit 50000");
++    if (Properties::Instance()->tmuxMouse)
++    {
++        conf << QStringLiteral("set -g mouse on");
++    }
++    else
++    {
++        // The terminal's own selection and scrollback keep working: tmux gets no
++        // mouse and draws on the main screen instead of the alternate one.
++        conf << QStringLiteral("set -g mouse off")
++             << QStringLiteral("set -ga terminal-overrides ',*:smcup@:rmcup@'");
++    }
++    // QTermWidget has no OSC 52: a tmux selection reaches the clipboard through a command
++    if (!QStandardPaths::findExecutable(QStringLiteral("wl-copy")).isEmpty() && qEnvironmentVariableIsSet("WAYLAND_DISPLAY"))
++        conf << QStringLiteral("set -s copy-command 'wl-copy'");
++    else if (!QStandardPaths::findExecutable(QStringLiteral("xclip")).isEmpty())
++        conf << QStringLiteral("set -s copy-command 'xclip -in -selection clipboard'");
++    else if (!QStandardPaths::findExecutable(QStringLiteral("xsel")).isEmpty())
++        conf << QStringLiteral("set -s copy-command 'xsel --input --clipboard'");
++
++    const QString xdgConfig = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation);
++    const QStringList userConfs{QDir::homePath() + QStringLiteral("/.tmux.conf"),
++                                xdgConfig + QStringLiteral("/tmux/tmux.conf")};
++    for (const QString &userConf : userConfs)
++    {
++        if (QFile::exists(userConf) && !quoted(userConf).isEmpty())
++            conf << QStringLiteral("source-file -q ") + quoted(userConf);
++    }
++
++    // the setting wins over ~/.tmux.conf: with the mouse in tmux, the selection is tmux's
++    if (!Properties::Instance()->tmuxMouse)
++        conf << QStringLiteral("set -g mouse off");
++
++    const QString plugin = findPlugin(QStringLiteral("tmux-resurrect"));
++    const QString resurrectDir = quoted(dataDir() + QStringLiteral("/resurrect"));
++    if (!plugin.isEmpty() && !resurrectDir.isEmpty() && !quoted(plugin).isEmpty())
++    {
++        conf << QStringLiteral("set -g @resurrect-dir ") + resurrectDir
++             << QStringLiteral("set -g @resurrect-capture-pane-contents 'on'")
++             << QStringLiteral("run-shell ") + quoted(plugin + QStringLiteral("/resurrect.tmux"));
++    }
++
++    QFile file(configPath());
++    if (file.open(QIODevice::WriteOnly | QIODevice::Truncate))
++        file.write(conf.join(QLatin1Char('\n')).toUtf8() + '\n');
++}
++
++void TmuxManager::installPlugins()
++{
++    if (m_installing || hasResurrect())
++        return;
++    const QString git = QStandardPaths::findExecutable(QStringLiteral("git"));
++    if (git.isEmpty())
++    {
++        emit statusMessage(tr("tmux-resurrect not found and git is missing: sessions will not survive a restart of tmux."));
++        return;
++    }
++    m_installing = true;
++    auto *process = new QProcess(this);
++    connect(process, &QProcess::finished, this, [this, process](int code, QProcess::ExitStatus status) {
++        m_installing = false;
++        process->deleteLater();
++        if (status != QProcess::NormalExit || code != 0 || !hasResurrect())
++        {
++            emit statusMessage(tr("Could not download tmux-resurrect: sessions will not survive a restart of tmux."));
++            return;
++        }
++        writeConfig();
++        if (serverRunning())
++            run({QStringLiteral("source-file"), configPath()});
++        emit statusMessage(tr("tmux-resurrect installed."));
++    });
++    connect(process, &QProcess::errorOccurred, process, [this, process](QProcess::ProcessError) {
++        if (process->state() == QProcess::NotRunning)
++            m_installing = false;
++    });
++    process->start(git, {QStringLiteral("clone"), QStringLiteral("--depth"), QStringLiteral("1"),
++                         QLatin1String(RESURRECT_REPO),
++                         dataDir() + QStringLiteral("/plugins/tmux-resurrect")});
++}
++
++void TmuxManager::setupSaveTimer()
++{
++    const int minutes = qMax(1, Properties::Instance()->tmuxSaveIntervalMinutes);
++    m_saveTimer.start(minutes * 60 * 1000);
++}
++
++void TmuxManager::start()
++{
++    if (!isActive())
++        return;
++    writeConfig();
++    if (hasResurrect() && !serverRunning())
++        restoreSaved();
++    else if (!hasResurrect())
++        installPlugins();
++    setupSaveTimer();
++}
++
++QString TmuxManager::newSessionName() const
++{
++    return QStringLiteral("qt-") + QUuid::createUuid().toString(QUuid::Id128).left(8);
++}
++
++QStringList TmuxManager::clientCommand(const QString &session, const QString &directory, const QStringList &userShell) const
++{
++    // "env -u TMUX": tmux refuses to nest when the program itself runs inside tmux
++    QStringList cmd{QStandardPaths::findExecutable(QStringLiteral("env")),
++                    QStringLiteral("-u"), QStringLiteral("TMUX"), QStringLiteral("-u"), QStringLiteral("TMUX_PANE"),
++                    m_tmux, QStringLiteral("-L"), QLatin1String(SOCKET_NAME), QStringLiteral("-f"), configPath(),
++                    QStringLiteral("new-session"), QStringLiteral("-A"), QStringLiteral("-s"), session};
++    if (!directory.isEmpty())
++        cmd << QStringLiteral("-c") << directory;
++    cmd << userShell;
++    return cmd;
++}
++
++QStringList TmuxManager::detachedSessions() const
++{
++    QString out;
++    if (!run({QStringLiteral("list-sessions"), QStringLiteral("-F"),
++              QStringLiteral("#{session_created}\t#{session_attached}\t#{session_name}")}, &out))
++    {
++        return {};
++    }
++    QList<QPair<qint64, QString>> found;
++    const QStringList lines = out.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
++    for (const QString &line : lines)
++    {
++        const QStringList parts = line.split(QLatin1Char('\t'));
++        if (parts.size() < 3 || parts.at(1).toInt() != 0 || parts.at(2) == QLatin1String(BOOT_SESSION))
++            continue;
++        found.append({parts.at(0).toLongLong(), parts.at(2)});
++    }
++    std::sort(found.begin(), found.end());
++    QStringList names;
++    for (const auto &item : std::as_const(found))
++        names << item.second;
++    return names;
++}
++
++QString TmuxManager::paneCurrentPath(const QString &session) const
++{
++    QString out;
++    if (!run({QStringLiteral("display-message"), QStringLiteral("-p"), QStringLiteral("-t"),
++              QLatin1Char('=') + session + QLatin1Char(':'), QStringLiteral("#{pane_current_path}")}, &out, 1000))
++    {
++        return QString();
++    }
++    return out.trimmed();
++}
++
++bool TmuxManager::sessionBusy(const QString &session) const
++{
++    QString out;
++    if (!run({QStringLiteral("list-panes"), QStringLiteral("-s"), QStringLiteral("-t"),
++              QLatin1Char('=') + session + QLatin1Char(':'), QStringLiteral("-F"),
++              QStringLiteral("#{pane_current_command}")}, &out, 1000))
++    {
++        return false;
++    }
++    static const QStringList shells{QStringLiteral("bash"), QStringLiteral("zsh"), QStringLiteral("fish"),
++                                    QStringLiteral("sh"), QStringLiteral("dash"), QStringLiteral("ksh"),
++                                    QStringLiteral("tcsh"), QStringLiteral("csh"), QStringLiteral("nu"),
++                                    QStringLiteral("elvish"), QStringLiteral("xonsh")};
++    const QString userShell = QFileInfo(qEnvironmentVariable("SHELL")).fileName();
++    const QStringList commands = out.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
++    for (QString command : commands)
++    {
++        command = command.trimmed();
++        if (command.startsWith(QLatin1Char('-'))) // login shell
++            command.remove(0, 1);
++        if (!shells.contains(command) && command != userShell)
++            return true;
++    }
++    return false;
++}
++
++void TmuxManager::killSession(const QString &session) const
++{
++    if (!isAvailable() || session.isEmpty())
++        return;
++    QProcess::startDetached(m_tmux, {QStringLiteral("-L"), QLatin1String(SOCKET_NAME),
++                                     QStringLiteral("kill-session"), QStringLiteral("-t"),
++                                     QLatin1Char('=') + session});
++}
++
++void TmuxManager::scrollProgram(const QString &session, int lines, int column, int row, bool page) const
++{
++    if (!isAvailable() || session.isEmpty() || lines == 0)
++        return;
++    const QString target = QLatin1Char('=') + session + QLatin1Char(':');
++    const QString count = QString::number(qAbs(lines));
++
++    // Only a full screen program (alternate screen) or one that tracks the mouse owns
++    // its scrolling; the history of anything else is shown by TmuxScrollBar.
++    QString flags;
++    if (run({QStringLiteral("display-message"), QStringLiteral("-p"), QStringLiteral("-t"), target,
++             QStringLiteral("#{pane_in_mode} #{alternate_on} #{mouse_any_flag} #{mouse_sgr_flag}")}, &flags, 1000))
++    {
++        const QStringList f = flags.trimmed().split(QLatin1Char(' '));
++        if (f.size() == 4 && f.at(0) == QLatin1String("0"))
++        {
++            if (f.at(2) == QLatin1String("1") && f.at(3) == QLatin1String("1"))
++            {
++                // wheel as the program asked for it: SGR button 64 (up) or 65 (down), 1-based cell
++                const QByteArray seq = "\x1b[<" + QByteArray::number(lines > 0 ? 64 : 65) + ';'
++                                       + QByteArray::number(column + 1) + ';' + QByteArray::number(row + 1) + 'M';
++                QStringList args{QStringLiteral("send-keys"), QStringLiteral("-t"), target, QStringLiteral("-H")};
++                const QByteArray hex = seq.toHex(' ');
++                for (int i = 0; i < qMax(1, qAbs(lines) / 3); ++i)
++                    args << QString::fromLatin1(hex).split(QLatin1Char(' '));
++                run(args, nullptr, 1000);
++                return;
++            }
++            if (f.at(1) == QLatin1String("1"))
++            {
++                // no mouse tracking: the cursor keys, like the alternate scroll mode of a terminal
++                // a page asked for goes as one PageUp/PageDown, which the program knows how to size
++                run({QStringLiteral("send-keys"), QStringLiteral("-t"), target, QStringLiteral("-N"), page ? QStringLiteral("1") : count,
++                     page ? (lines > 0 ? QStringLiteral("PageUp") : QStringLiteral("PageDown"))
++                          : (lines > 0 ? QStringLiteral("Up") : QStringLiteral("Down"))}, nullptr, 1000);
++                return;
++            }
++        }
++    }
++}
++
++void TmuxManager::clearPane(const QString &session) const
++{
++    const QString target = QLatin1Char('=') + session + QLatin1Char(':');
++    run({QStringLiteral("clear-history"), QStringLiteral("-t"), target}, nullptr, 1000);
++    run({QStringLiteral("send-keys"), QStringLiteral("-t"), target, QStringLiteral("C-l")}, nullptr, 1000);
++}
++
++void TmuxManager::saveNow(bool wait)
++{
++    const QString plugin = findPlugin(QStringLiteral("tmux-resurrect"));
++    if (!isActive() || plugin.isEmpty() || !serverRunning())
++        return;
++    emit layoutRequested();
++    const QString script = plugin + QStringLiteral("/scripts/save.sh");
++    if (wait)
++    {
++        run({QStringLiteral("run-shell"), QStringLiteral("'") + script + QStringLiteral("' quiet")}, nullptr, 15000);
++        return;
++    }
++    // "-b": tmux runs the script in the background and returns at once
++    QProcess::startDetached(m_tmux, {QStringLiteral("-L"), QLatin1String(SOCKET_NAME),
++                                     QStringLiteral("run-shell"), QStringLiteral("-b"),
++                                     QStringLiteral("'") + script + QStringLiteral("' quiet")});
++}
++
++bool TmuxManager::restoreSaved()
++{
++    const QString plugin = findPlugin(QStringLiteral("tmux-resurrect"));
++    if (!isActive() || plugin.isEmpty())
++        return false;
++    writeConfig();
++    const bool wasRunning = serverRunning();
++    if (!wasRunning
++        && !run({QStringLiteral("new-session"), QStringLiteral("-d"), QStringLiteral("-s"), QLatin1String(BOOT_SESSION)}))
++    {
++        return false;
++    }
++    const bool ok = run({QStringLiteral("run-shell"),
++                         QStringLiteral("'") + plugin + QStringLiteral("/scripts/restore.sh'")}, nullptr, 60000);
++    if (!wasRunning)
++    {
++        // the bootstrap session only keeps the new server alive while restoring
++        if (!detachedSessions().isEmpty())
++            run({QStringLiteral("kill-session"), QStringLiteral("-t"), QLatin1Char('=') + QLatin1String(BOOT_SESSION)});
++    }
++    return ok;
++}
++
++QJsonArray TmuxManager::loadLayout() const
++{
++    QFile file(dataDir() + QStringLiteral("/layout.json"));
++    if (!file.open(QIODevice::ReadOnly))
++        return QJsonArray();
++    return QJsonDocument::fromJson(file.readAll()).array();
++}
++
++void TmuxManager::saveLayout(const QJsonArray &tabs) const
++{
++    QDir().mkpath(dataDir());
++    QFile file(dataDir() + QStringLiteral("/layout.json"));
++    if (file.open(QIODevice::WriteOnly | QIODevice::Truncate))
++        file.write(QJsonDocument(tabs).toJson(QJsonDocument::Compact));
++}
+diff -ruN -x .git orig/src/tmuxmanager.h src/src/tmuxmanager.h
+--- orig/src/tmuxmanager.h	1970-01-01 01:00:00.000000000 +0100
++++ src/src/tmuxmanager.h	2026-11-11 00:00:51.749116474 +0100
+@@ -0,0 +1,116 @@
++/***************************************************************************
++ *   This program is free software; you can redistribute it and/or modify  *
++ *   it under the terms of the GNU General Public License as published by  *
++ *   the Free Software Foundation; either version 2 of the License, or     *
++ *   (at your option) any later version.                                   *
++ *                                                                         *
++ *   This program is distributed in the hope that it will be useful,       *
++ *   but WITHOUT ANY WARRANTY; without even the implied warranty of        *
++ *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         *
++ *   GNU General Public License for more details.                          *
++ *                                                                         *
++ *   You should have received a copy of the GNU General Public License     *
++ *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
++ ***************************************************************************/
++
++#ifndef TMUXMANAGER_H
++#define TMUXMANAGER_H
++
++#include <QJsonArray>
++#include <QObject>
++#include <QStringList>
++#include <QTimer>
++
++class QProcess;
++
++/*!
++ * Runs every terminal inside its own tmux session, on a private tmux server
++ * (socket "qterminal", generated config), and keeps the sessions alive across
++ * restarts with tmux-resurrect:
++ *  - the sessions are saved every few minutes and when the program quits;
++ *  - at start the saved sessions are restored and offered again as tabs.
++ *
++ * tmux-continuum is not used for the saving: it piggybacks on the tmux status
++ * line, which is hidden here because the tabs are the program's own.
++ */
++class TmuxManager : public QObject
++{
++    Q_OBJECT
++
++public:
++    static TmuxManager *instance();
++
++    //! tmux is installed
++    bool isAvailable() const;
++    //! tmux is installed and the user did not turn it off
++    bool isActive() const;
++    //! the tmux-resurrect plugin is found
++    bool hasResurrect() const;
++
++    /*!
++     * Prepares the config, restores the saved sessions if the server is not
++     * running and starts the periodic saving. To be called once at startup.
++     */
++    void start();
++
++    QString newSessionName() const;
++    /*! Program and arguments that attach (creating it if needed) a session. */
++    QStringList clientCommand(const QString &session, const QString &directory, const QStringList &userShell) const;
++
++    //! Names of the sessions that no terminal shows, oldest first
++    QStringList detachedSessions() const;
++    QString paneCurrentPath(const QString &session) const;
++    //! something other than the shell is running in the session
++    bool sessionBusy(const QString &session) const;
++    void killSession(const QString &session) const;
++    //! Scrolls the program that runs in the session, if it owns the scrolling (alternate screen or mouse
++    //! tracking): \p lines > 0 goes back, < 0 forward. \p column and \p row (0-based) are where the wheel
++    //! is; \p page: \p lines is a whole page. Does nothing for a program that does not.
++    void scrollProgram(const QString &session, int lines, int column = 0, int row = 0, bool page = false) const;
++    //! Runs tmux without waiting. The caller reads the output when the process finishes; null if tmux is not available.
++    QProcess *start(const QStringList &args, QObject *parent) const;
++    //! Empties the history of the session and redraws its screen
++    void clearPane(const QString &session) const;
++
++    //! Saves the sessions with tmux-resurrect. \p wait blocks until done.
++    void saveNow(bool wait = false);
++    //! Runs the tmux-resurrect restore into the running server
++    bool restoreSaved();
++
++    //! The last saved arrangement of the tabs (see TabWidget)
++    QJsonArray loadLayout() const;
++    void saveLayout(const QJsonArray &tabs) const;
++
++    //! Turns tmux off for this run only (the setting is not changed)
++    void setDisabled() { m_disabled = true; }
++
++    bool isQuitting() const { return m_quitting; }
++    void setQuitting() { m_quitting = true; }
++
++signals:
++    void statusMessage(const QString &message);
++    //! The arrangement of the tabs should be written (just before a save)
++    void layoutRequested();
++
++private:
++    TmuxManager();
++
++    bool run(const QStringList &args, QString *out = nullptr, int timeoutMs = 5000) const;
++    void prepare(QProcess &process) const;
++    QStringList serverArguments() const;
++    bool serverRunning() const;
++    QString dataDir() const;
++    QString configPath() const;
++    QString findPlugin(const QString &name) const;
++    void writeConfig() const;
++    void installPlugins();
++    void setupSaveTimer();
++
++    QString m_tmux;
++    QTimer m_saveTimer;
++    bool m_quitting = false;
++    bool m_disabled = false;
++    bool m_installing = false;
++};
++
++#endif // TMUXMANAGER_H
+diff -ruN -x .git orig/test/CMakeLists.txt src/test/CMakeLists.txt
+--- orig/test/CMakeLists.txt	2026-11-05 12:31:00.074355928 +0100
++++ src/test/CMakeLists.txt	2026-11-11 00:00:51.749167802 +0100
+@@ -17,6 +17,7 @@
+ add_executable(qterminal_test
+     qterminal_test.cpp
+     ${CMAKE_SOURCE_DIR}/src/qterminalutils.cpp
++    ${CMAKE_SOURCE_DIR}/src/terminalcontext.cpp
+     ${QTERM_TEST_MOC})
+ 
+ target_link_libraries(qterminal_test ${QT_TEST_LIB})
+diff -ruN -x .git orig/test/qterminal_test.cpp src/test/qterminal_test.cpp
+--- orig/test/qterminal_test.cpp	2026-11-05 12:31:00.074366709 +0100
++++ src/test/qterminal_test.cpp	2026-11-11 00:00:51.749182520 +0100
+@@ -18,6 +18,7 @@
+ #include "qterminal_test.h"
+ 
+ #include "qterminalutils.h"
++#include "terminalcontext.h"
+ 
+ #include <QtTest>
+ 
+@@ -50,4 +51,76 @@
+              QStringList() << QL1S("fpad") << QL1S("-s") << QL1S("PATH/ha ha"));
+ }
+ 
++
++void QTerminalTest::testStripLineBreaks()
++{
++    QCOMPARE(TerminalContext::stripLineBreaks(QL1S("a\nb\r\nc")), QL1S("abc"));
++    QCOMPARE(TerminalContext::stripLineBreaks(QString::fromUtf8("a b c")), QL1S("abc"));
++    QCOMPARE(TerminalContext::stripLineBreaks(QL1S("a b\n c")), QL1S("a b c"));
++}
++
++void QTerminalTest::testCleanCommand()
++{
++    QCOMPARE(TerminalContext::cleanCommand(QL1S("      40 +sudo sv status cloudflared")),
++             QL1S("sudo sv status cloudflared"));
++    QCOMPARE(TerminalContext::cleanCommand(QL1S("$ ls -la  \r\n")), QL1S("ls -la"));
++    QCOMPARE(TerminalContext::cleanCommand(QL1S("# make install")), QL1S("make install"));
++    QCOMPARE(TerminalContext::cleanCommand(QL1S("> echo hi")), QL1S("echo hi"));
++    QCOMPARE(TerminalContext::cleanCommand(QString::fromUtf8("❯ git status")), QL1S("git status"));
++    QCOMPARE(TerminalContext::cleanCommand(QString::fromUtf8("12 -$ rm x")), QL1S("rm x"));
++    // not a prompt, not a number, not a diff marker
++    QCOMPARE(TerminalContext::cleanCommand(QL1S("echo $HOME")), QL1S("echo $HOME"));
++    QCOMPARE(TerminalContext::cleanCommand(QL1S("7z a x.7z")), QL1S("7z a x.7z"));
++    QCOMPARE(TerminalContext::cleanCommand(QL1S("#comment")), QL1S("#comment"));
++    QCOMPARE(TerminalContext::cleanCommand(QL1S("   ")), QString());
++}
++
++void QTerminalTest::testPathAt()
++{
++    const QString prompt = QL1S("~/progetti/app$ ");
++    QCOMPARE(TerminalContext::pathAt(prompt, 3), QL1S("~/progetti/app"));
++    QCOMPARE(TerminalContext::pathAt(prompt, 14), QString()); // on the "$"
++    QCOMPARE(TerminalContext::pathAt(QL1S("cd /usr/local/bin>"), 5), QL1S("/usr/local/bin"));
++    QCOMPARE(TerminalContext::pathAt(QL1S("src/main.cpp:12:3: error"), 6), QString()); // no prefix
++    QCOMPARE(TerminalContext::pathAt(QL1S("./src/main.cpp:12:3: error"), 5), QL1S("./src/main.cpp"));
++    QCOMPARE(TerminalContext::pathAt(QL1S("see ../x/y.txt:42 now"), 6), QL1S("../x/y.txt"));
++    QCOMPARE(TerminalContext::pathAt(QL1S("open '/tmp/a b' now"), 7), QL1S("/tmp/a"));
++    QCOMPARE(TerminalContext::pathAt(QL1S("lt1@host:~/dir$ ls"), 12), QL1S("~/dir"));
++    QCOMPARE(TerminalContext::pathAt(QL1S("--config=/etc/x.conf"), 12), QL1S("/etc/x.conf"));
++    QCOMPARE(TerminalContext::pathAt(QL1S("see /etc/hosts."), 6), QL1S("/etc/hosts"));
++    QCOMPARE(TerminalContext::pathAt(QL1S("https://example.com/a/b"), 15), QString());
++    QCOMPARE(TerminalContext::pathAt(QL1S("plain words"), 2), QString());
++    QCOMPARE(TerminalContext::pathAt(QL1S("a / b"), 2), QString());
++    QCOMPARE(TerminalContext::pathAt(QL1S("/etc"), 99), QString());
++}
++
++void QTerminalTest::testAbsolutePath()
++{
++    QCOMPARE(TerminalContext::absolutePath(QL1S("~/x/y"), QL1S("/cwd"), QL1S("/home/u")), QL1S("/home/u/x/y"));
++    QCOMPARE(TerminalContext::absolutePath(QL1S("./x"), QL1S("/cwd/sub"), QL1S("/home/u")), QL1S("/cwd/sub/x"));
++    QCOMPARE(TerminalContext::absolutePath(QL1S("../x"), QL1S("/cwd/sub"), QL1S("/home/u")), QL1S("/cwd/x"));
++    QCOMPARE(TerminalContext::absolutePath(QL1S("/a/b/"), QL1S("/cwd"), QL1S("/home/u")), QL1S("/a/b"));
++    QCOMPARE(TerminalContext::absolutePath(QL1S("./x"), QString(), QL1S("/home/u")), QL1S("./x"));
++}
++
++void QTerminalTest::testIsSafeUrl()
++{
++    QVERIFY(TerminalContext::isSafeUrl(QUrl(QL1S("https://example.com")), false));
++    QVERIFY(TerminalContext::isSafeUrl(QUrl(QL1S("HTTP://example.com")), false));
++    QVERIFY(TerminalContext::isSafeUrl(QUrl(QL1S("mailto:a@b.c")), false));
++    QVERIFY(!TerminalContext::isSafeUrl(QUrl(QL1S("file:///etc/passwd")), false));
++    QVERIFY(TerminalContext::isSafeUrl(QUrl(QL1S("file:///etc/passwd")), true));
++    QVERIFY(!TerminalContext::isSafeUrl(QUrl(QL1S("javascript:alert(1)")), true));
++    QVERIFY(!TerminalContext::isSafeUrl(QUrl(QL1S("ssh://host")), true));
++}
++
++void QTerminalTest::testWordRangeAt()
++{
++    const QString wc = QL1S(":@-./_~");
++    QCOMPARE(TerminalContext::wordRangeAt(QL1S("ls  foo-bar.txt x"), 6, wc), qMakePair(4, 15 - 1));
++    QCOMPARE(TerminalContext::wordRangeAt(QL1S("ls  foo"), 2, wc), qMakePair(-1, -1));
++    QCOMPARE(TerminalContext::wordRangeAt(QL1S("abc"), 0, wc), qMakePair(0, 2));
++    QCOMPARE(TerminalContext::wordRangeAt(QL1S("abc"), 3, wc), qMakePair(-1, -1));
++}
++
+ QTEST_MAIN(QTerminalTest)
+diff -ruN -x .git orig/test/qterminal_test.h src/test/qterminal_test.h
+--- orig/test/qterminal_test.h	2026-11-05 12:31:00.074375546 +0100
++++ src/test/qterminal_test.h	2026-11-11 00:00:51.749193842 +0100
+@@ -27,6 +27,12 @@
+     // Each private slot is a test function
+ private Q_SLOTS:
+     void testParseCommand();
++    void testStripLineBreaks();
++    void testCleanCommand();
++    void testPathAt();
++    void testAbsolutePath();
++    void testIsSafeUrl();
++    void testWordRangeAt();
+ };
+ 
+ #endif

@@ -20,6 +20,9 @@
 #include <QPainter>
 #include <QStyleOption>
 #include <QProxyStyle>
+#include <QToolButton>
+#include <QIcon>
+#include <QTimer>
 
 class TabTextStyle : public QProxyStyle
 { // Give a normal font to inactive tabs.
@@ -56,6 +59,7 @@ public:
 
 TabBar::TabBar(QWidget *parent)
     : QTabBar(parent),
+      mNewTabButton(new QToolButton(this)),
       mFixedWidth(false),
       mFixedWidthValue(0)
 {
@@ -70,6 +74,86 @@ TabBar::TabBar(QWidget *parent)
     TabTextStyle *s = new TabTextStyle;
     s->setParent(this);
     setStyle(s);
+
+    // the button that opens a new tab sits right after the last tab
+    mNewTabButton->setAutoRaise(true);
+    mNewTabButton->setFocusPolicy(Qt::NoFocus);
+    mNewTabButton->setToolTip(tr("New tab"));
+    const QIcon icon = QIcon::fromTheme(QStringLiteral("list-add"));
+    if (icon.isNull())
+        mNewTabButton->setText(QStringLiteral("+"));
+    else
+        mNewTabButton->setIcon(icon);
+    connect(mNewTabButton, &QToolButton::clicked, this, &TabBar::newTabRequested);
+}
+
+void TabBar::placeNewTabButton()
+{
+    if (count() == 0)
+    {
+        mNewTabButton->hide();
+        return;
+    }
+    const bool vertical = shape() == QTabBar::RoundedEast || shape() == QTabBar::TriangularEast
+                          || shape() == QTabBar::RoundedWest || shape() == QTabBar::TriangularWest;
+    const QSize size(qMin(mNewTabButton->sizeHint().width(), qMax(16, tabRect(0).height())),
+                     qMin(mNewTabButton->sizeHint().height(), qMax(16, tabRect(0).height())));
+    mNewTabButton->resize(size);
+
+    // the scroll arrows of a bar with too many tabs sit at its far end
+    int reserved = 0;
+    const auto buttons = findChildren<QToolButton*>(QString(), Qt::FindDirectChildrenOnly);
+    for (QToolButton *button : buttons)
+    {
+        if (button != mNewTabButton && button->isVisible())
+            reserved += vertical ? button->height() : button->width();
+    }
+
+    const QRect last = tabRect(count() - 1);
+    QPoint pos;
+    if (vertical)
+    {
+        pos = QPoint((width() - size.width()) / 2,
+                     qMin(last.bottom() + 3, height() - size.height() - reserved));
+    }
+    else
+    {
+        pos = QPoint(qMin(last.right() + 3, width() - size.width() - reserved),
+                     (height() - size.height()) / 2);
+    }
+    mNewTabButton->move(qMax(0, pos.x()), qMax(0, pos.y()));
+    mNewTabButton->show();
+    mNewTabButton->raise();
+}
+
+void TabBar::tabLayoutChange()
+{
+    QTabBar::tabLayoutChange();
+    placeNewTabButton();
+}
+
+void TabBar::tabInserted(int index)
+{
+    QTabBar::tabInserted(index);
+    placeNewTabButton();
+}
+
+void TabBar::tabRemoved(int index)
+{
+    QTabBar::tabRemoved(index);
+    placeNewTabButton();
+}
+
+void TabBar::resizeEvent(QResizeEvent *event)
+{
+    QTabBar::resizeEvent(event);
+    placeNewTabButton();
+}
+
+void TabBar::showEvent(QShowEvent *event)
+{
+    QTabBar::showEvent(event);
+    placeNewTabButton();
 }
 
 void TabBar::setFixedWidth(bool fixedWidth)

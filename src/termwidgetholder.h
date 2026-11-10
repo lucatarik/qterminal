@@ -19,6 +19,7 @@
 #ifndef TERMWIDGETHOLDER_H
 #define TERMWIDGETHOLDER_H
 
+#include <QJsonObject>
 #include <QWidget>
 #include "termwidget.h"
 #include "terminalconfig.h"
@@ -67,6 +68,11 @@ class TermWidgetHolder : public QWidget
 
         bool hasRunningProcess() const;
 
+        //! The splits of this tab with the tmux session of each terminal
+        QJsonObject layout() const;
+        //! Rebuilds the splits described by layout(); the first terminal must show the first session
+        void applyLayout(const QJsonObject &root);
+
         #ifdef HAVE_QDBUS
         QDBusObjectPath getActiveTerminal();
         QList<QDBusObjectPath> getTerminals();
@@ -98,6 +104,7 @@ class TermWidgetHolder : public QWidget
 
         void split(TermWidget * term, Qt::Orientation orientation);
         TermWidget * newTerm(TerminalConfig &cfg);
+        void fillSplitter(QSplitter *target, const QJsonObject &node, TermWidget *&reuse);
 
     private slots:
         void setCurrentTerminal(TermWidget* term);

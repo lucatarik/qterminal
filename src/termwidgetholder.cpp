@@ -17,6 +17,7 @@
  ***************************************************************************/
 
 #include <QGridLayout>
+#include <QJsonArray>
 #include <QSplitter>
 #include <QInputDialog>
 
@@ -256,7 +257,7 @@ void TermWidgetHolder::directionalNavigation(NavigationDirection dir) {
 
 void TermWidgetHolder::clearActiveTerminal()
 {
-    currentTerminal()->impl()->clear();
+    currentTerminal()->impl()->clearTerminal();
 }
 
 void TermWidgetHolder::propertiesChanged()
@@ -342,7 +343,7 @@ TermWidget * TermWidgetHolder::split(TermWidget *term, Qt::Orientation orientati
     s->setFocusPolicy(Qt::NoFocus);
     s->insertWidget(0, term);
 
-    cfg.provideCurrentDirectory(term->impl()->workingDirectory());
+    cfg.provideCurrentDirectory(term->impl()->currentDirectory());
 
     TermWidget * w = newTerm(cfg);
     s->insertWidget(1, w);
@@ -409,6 +410,83 @@ void TermWidgetHolder::onTermTitleChanged(QString title, QString icon) const
         emit termTitleChanged(std::move(title), std::move(icon));
 }
 
+static QJsonObject widgetLayout(QWidget *w)
+{
+    QJsonObject node;
+    if (auto *term = qobject_cast<TermWidget*>(w))
+    {
+        node[QStringLiteral("session")] = term->impl()->tmuxSession();
+    }
+    else if (auto *splitter = qobject_cast<QSplitter*>(w))
+    {
+        QJsonArray children, sizes;
+        for (int i = 0; i < splitter->count(); ++i)
+            children.append(widgetLayout(splitter->widget(i)));
+        const auto list = splitter->sizes();
+        for (int size : list)
+            sizes.append(size);
+        node[QStringLiteral("o")] = int(splitter->orientation());
+        node[QStringLiteral("sizes")] = sizes;
+        node[QStringLiteral("c")] = children;
+    }
+    return node;
+}
+
+QJsonObject TermWidgetHolder::layout() const
+{
+    const auto splitters = findChildren<QSplitter*>(QString(), Qt::FindDirectChildrenOnly);
+    return splitters.isEmpty() ? QJsonObject() : widgetLayout(splitters.first());
+}
+
+void TermWidgetHolder::fillSplitter(QSplitter *target, const QJsonObject &node, TermWidget *&reuse)
+{
+    target->setOrientation(Qt::Orientation(node.value(QStringLiteral("o")).toInt(Qt::Horizontal)));
+    const QJsonArray children = node.value(QStringLiteral("c")).toArray();
+    for (const QJsonValue &value : children)
+    {
+        const QJsonObject child = value.toObject();
+        if (child.contains(QStringLiteral("session")))
+        {
+            TermWidget *term = reuse;
+            reuse = nullptr;
+            if (!term)
+            {
+                TerminalConfig cfg;
+                cfg.setTmuxSession(child.value(QStringLiteral("session")).toString());
+                term = newTerm(cfg);
+            }
+            target->addWidget(term);
+        }
+        else
+        {
+            QSplitter *sub = new QSplitter(this);
+            sub->setFocusPolicy(Qt::NoFocus);
+            target->addWidget(sub);
+            fillSplitter(sub, child, reuse);
+        }
+    }
+    QList<int> sizes;
+    const QJsonArray saved = node.value(QStringLiteral("sizes")).toArray();
+    for (const QJsonValue &size : saved)
+        sizes << size.toInt();
+    if (sizes.size() == target->count())
+        target->setSizes(sizes);
+}
+
+void TermWidgetHolder::applyLayout(const QJsonObject &root)
+{
+    const auto splitters = findChildren<QSplitter*>(QString(), Qt::FindDirectChildrenOnly);
+    if (splitters.isEmpty() || !root.contains(QStringLiteral("c")))
+        return;
+    TermWidget *first = m_currentTerm;
+    first->setParent(this); // out of the splitter, which is filled again
+    first->hide();
+    TermWidget *reuse = first;
+    fillSplitter(splitters.first(), root, reuse);
+    first->show();
+    first->setFocus(Qt::OtherFocusReason);
+}
+
 bool TermWidgetHolder::hasRunningProcess() const
 {
     const QList<TermWidget*> list = findChildren<TermWidget*>();
@@ -416,7 +494,7 @@ bool TermWidgetHolder::hasRunningProcess() const
     {
         if (auto impl = term->impl())
         {
-            if (impl->hasCommand() || impl->getForegroundProcessId() != impl->getShellPID())
+            if (impl->hasForegroundJob())
             {
                 return true;
             }

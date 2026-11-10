@@ -27,6 +27,12 @@ class QTerminalTest : public QObject
     // Each private slot is a test function
 private Q_SLOTS:
     void testParseCommand();
+    void testStripLineBreaks();
+    void testCleanCommand();
+    void testPathAt();
+    void testAbsolutePath();
+    void testIsSafeUrl();
+    void testWordRangeAt();
 };
 
 #endif

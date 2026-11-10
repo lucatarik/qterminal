@@ -33,6 +33,9 @@
 #include "properties.h"
 #include "qterminalapp.h"
 #include "tab-switcher.h"
+#include "tmuxmanager.h"
+#include <QJsonObject>
+#include <QSet>
 
 
 #define TAB_INDEX_PROPERTY "tab_index"
@@ -58,6 +61,10 @@ TabWidget::TabWidget(QWidget* parent) : QTabWidget(parent), tabNumerator(0), mTa
 
     tabBar()->installEventFilter(this);
 
+    connect(mTabBar, &TabBar::newTabRequested, this, [this] {
+        if (auto *window = findParent<MainWindow>(this))
+            QMetaObject::invokeMethod(window, "addNewTab");
+    });
     connect(this, &TabWidget::tabCloseRequested, this, [this](int indx) {
         removeTab(indx, true);
     });
@@ -86,7 +93,7 @@ int TabWidget::addNewTab(TerminalConfig config)
 
     TermWidgetHolder *ch = terminalHolder();
     if (ch)
-        config.provideCurrentDirectory(ch->currentTerminal()->impl()->workingDirectory());
+        config.provideCurrentDirectory(ch->currentTerminal()->impl()->currentDirectory());
 
     TermWidgetHolder *console = new TermWidgetHolder(config, this);
     console->setWindowTitle(label);
@@ -145,7 +152,7 @@ void TabWidget::splitCollapse()
     {
         if (auto impl = terminalHolder()->currentTerminal()->impl())
         {
-            if (impl->hasCommand() || impl->getForegroundProcessId() != impl->getShellPID())
+            if (impl->hasForegroundJob())
             {
                 if (!win->closePrompt(tr("Close Subterminal"), tr("Are you sure you want to close this subterminal?")))
                 {
@@ -161,7 +168,7 @@ void TabWidget::splitCollapse()
 
 void TabWidget::copySelection()
 {
-    terminalHolder()->currentTerminal()->impl()->copyClipboard();
+    terminalHolder()->currentTerminal()->copySelection();
 }
 
 void TabWidget::pasteClipboard()
@@ -674,4 +681,93 @@ bool TabWidget::hasRunningProcess() const
         }
     }
     return false;
+}
+
+QJsonArray TabWidget::layout() const
+{
+    QJsonArray tabs;
+    for (int i = 0; i < count(); i++)
+    {
+        if (auto *holder = qobject_cast<TermWidgetHolder*>(widget(i)))
+        {
+            QJsonObject tab;
+            tab[QStringLiteral("title")] = tabText(i);
+            tab[QStringLiteral("root")] = holder->layout();
+            tabs.append(tab);
+        }
+    }
+    return tabs;
+}
+
+// keeps the terminals of the sessions in \p available; nothing left: empty object
+static QJsonObject pruneLayout(const QJsonObject &node, const QSet<QString> &available)
+{
+    if (node.contains(QStringLiteral("session")))
+        return available.contains(node.value(QStringLiteral("session")).toString()) ? node : QJsonObject();
+    QJsonArray children;
+    const QJsonArray all = node.value(QStringLiteral("c")).toArray();
+    for (const QJsonValue &value : all)
+    {
+        const QJsonObject child = pruneLayout(value.toObject(), available);
+        if (!child.isEmpty())
+            children.append(child);
+    }
+    if (children.isEmpty())
+        return QJsonObject();
+    QJsonObject pruned = node;
+    pruned[QStringLiteral("c")] = children;
+    if (children.size() != all.size())
+        pruned.remove(QStringLiteral("sizes"));
+    return pruned;
+}
+
+static void layoutSessions(const QJsonObject &node, QStringList &sessions)
+{
+    if (node.contains(QStringLiteral("session")))
+    {
+        sessions << node.value(QStringLiteral("session")).toString();
+        return;
+    }
+    const QJsonArray children = node.value(QStringLiteral("c")).toArray();
+    for (const QJsonValue &child : children)
+        layoutSessions(child.toObject(), sessions);
+}
+
+bool TabWidget::restoreTmuxTabs()
+{
+    TmuxManager *tmux = TmuxManager::instance();
+    const QStringList detached = tmux->detachedSessions();
+    if (detached.isEmpty())
+        return false;
+    QSet<QString> available(detached.begin(), detached.end());
+
+    const QJsonArray saved = tmux->loadLayout();
+    for (const QJsonValue &value : saved)
+    {
+        const QJsonObject tab = value.toObject();
+        const QJsonObject root = pruneLayout(tab.value(QStringLiteral("root")).toObject(), available);
+        QStringList sessions;
+        layoutSessions(root, sessions);
+        if (sessions.isEmpty())
+            continue;
+        TerminalConfig cfg;
+        cfg.setTmuxSession(sessions.first());
+        const int index = addNewTab(cfg);
+        if (auto *holder = qobject_cast<TermWidgetHolder*>(widget(index)))
+            holder->applyLayout(root);
+        const QString title = tab.value(QStringLiteral("title")).toString();
+        if (!title.isEmpty())
+            setTabText(index, title);
+        for (const QString &session : std::as_const(sessions))
+            available.remove(session);
+    }
+    for (const QString &session : detached)
+    {
+        if (!available.contains(session))
+            continue;
+        TerminalConfig cfg;
+        cfg.setTmuxSession(session);
+        addNewTab(cfg);
+    }
+    return count() > 0;
 }

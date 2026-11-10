@@ -42,6 +42,7 @@
 #include "propertiesdialog.h"
 #include "bookmarkswidget.h"
 #include "qterminalapp.h"
+#include "tmuxmanager.h"
 #include "dbusaddressable.h"
 
 #include <LayerShellQt/Shell>
@@ -148,7 +149,50 @@ MainWindow::MainWindow(TerminalConfig &cfg,
     /* The tab should be added after all changes are made to
        the main window; otherwise, the initial prompt might
        get jumbled because of changes in internal geometry. */
-    addNewTab(m_config);
+    setupTmuxMenu();
+
+    // tmux sessions kept from the last run come back as tabs
+    if (m_config.hasCommand() || !TmuxManager::instance()->isActive() || !consoleTabulator->restoreTmuxTabs())
+        addNewTab(m_config);
+}
+
+QJsonArray MainWindow::tmuxLayout() const
+{
+    return consoleTabulator->layout();
+}
+
+void MainWindow::setupTmuxMenu()
+{
+    QMenu *menu = new QMenu(tr("T&mux"), this);
+    m_menuBar->insertMenu(menu_Help->menuAction(), menu);
+    TmuxManager *tmux = TmuxManager::instance();
+
+    QAction *enable = menu->addAction(tr("Persistent sessions (tmux)"));
+    enable->setCheckable(true);
+    enable->setChecked(Properties::Instance()->tmuxEnabled);
+    enable->setToolTip(tr("Applies to the terminals opened from now on"));
+    connect(enable, &QAction::toggled, this, [](bool on) {
+        Properties::Instance()->tmuxEnabled = on;
+        Properties::Instance()->saveSettings();
+        if (on)
+            TmuxManager::instance()->start();
+    });
+    menu->addSeparator();
+    QAction *save = menu->addAction(tr("Save sessions now"));
+    connect(save, &QAction::triggered, this, [] { TmuxManager::instance()->saveNow(); });
+    QAction *restore = menu->addAction(tr("Restore saved sessions"));
+    connect(restore, &QAction::triggered, this, [this] {
+        TmuxManager::instance()->restoreSaved();
+        consoleTabulator->restoreTmuxTabs();
+    });
+
+    connect(menu, &QMenu::aboutToShow, this, [=] {
+        const bool available = tmux->isAvailable();
+        enable->setEnabled(available);
+        enable->setText(available ? tr("Persistent sessions (tmux)") : tr("Persistent sessions (tmux is not installed)"));
+        save->setEnabled(tmux->isActive());
+        restore->setEnabled(tmux->isActive());
+    });
 }
 
 void MainWindow::rebuildActions()
@@ -679,6 +723,12 @@ void MainWindow::closeEvent(QCloseEvent *ev)
                 Properties::Instance()->mainWindowState = saveState();
             }
         }
+        if (TmuxManager::instance()->isActive() && QTerminalApp::Instance()->getWindowList().size() <= 1)
+        {
+            // quitting: the sessions stay alive for the next start
+            TmuxManager::instance()->setQuitting();
+            TmuxManager::instance()->saveNow(true);
+        }
         rebuildActions(); // shortcuts may have changed by another running instance
         Properties::Instance()->saveSettings();
         for (int i = consoleTabulator->count(); i > 0; --i)
@@ -941,7 +991,7 @@ void MainWindow::newTerminalWindow()
     TerminalConfig cfg;
     TermWidgetHolder *ch = consoleTabulator->terminalHolder();
     if (ch)
-        cfg.provideCurrentDirectory(ch->currentTerminal()->impl()->workingDirectory());
+        cfg.provideCurrentDirectory(ch->currentTerminal()->impl()->currentDirectory());
 
     if (m_dropMode)
     { // the dropdown process has only one (dropdown) main window
@@ -1002,6 +1052,11 @@ void MainWindow::addNewTab(TerminalConfig cfg)
     else
         consoleTabulator->addNewTab(cfg);
     // disabled actions are updated by TabWidget::onCurrentChanged()
+}
+
+void MainWindow::addTabIn(const QString &folder)
+{
+    consoleTabulator->addNewTab(TerminalConfig(folder, QStringList()));
 }
 
 void MainWindow::onCurrentTitleChanged(int index)

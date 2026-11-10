@@ -34,12 +34,14 @@
 
 #include "mainwindow.h"
 #include "qterminalapp.h"
+#include "tmuxmanager.h"
+#include <QMessageBox>
 #include "qterminalutils.h"
 #include "terminalconfig.h"
 
 #define out
 
-const char* const short_options = "vhw:e:dp:";
+const char* const short_options = "vhw:e:dp:T";
 
 static const char* serviceName = "org.lxqt.QTerminal";
 static const char* ifaceName = "org.lxqt.QTerminal.Process";
@@ -51,6 +53,7 @@ const struct option long_options[] = {
     {"execute", 1, nullptr, 'e'},
     {"drop",    0, nullptr, 'd'},
     {"profile", 1, nullptr, 'p'},
+    {"no-tmux", 0, nullptr, 'T'},
     {nullptr,   0, nullptr,  0}
 };
 
@@ -64,6 +67,7 @@ QTerminalApp * QTerminalApp::m_instance = nullptr;
     puts("  -e,  --execute <command>  Execute command instead of shell");
     puts("  -h,  --help               Print this help");
     puts("  -p,  --profile <name>     Load profile from ~/.config/<name>.conf");
+    puts("  -T,  --no-tmux            Run every terminal as a plain process, without tmux (this run only)");
     puts("  -v,  --version            Prints application version and exits");
     puts("  -w,  --workdir <dir>      Start session with specified work directory");
     puts("\nHomepage: <https://github.com/lxqt/qterminal>");
@@ -106,6 +110,9 @@ void parse_args(int argc, char* argv[], QString& workdir, QStringList & shell_co
                 break;
             case 'p':
                 Properties::Instance(QString::fromLocal8Bit(optarg));
+                break;
+            case 'T':
+                TmuxManager::instance()->setDisabled();
                 break;
             case '?':
                 print_usage_and_exit(1);
@@ -219,6 +226,27 @@ int main(int argc, char *argv[])
     {
         app->installTranslator(&translator);
     }
+
+    TmuxManager *tmux = TmuxManager::instance();
+    QObject::connect(tmux, &TmuxManager::layoutRequested, app, [app, tmux] {
+        QJsonArray tabs;
+        const auto windows = app->getWindowList();
+        for (MainWindow *window : windows)
+        {
+            const QJsonArray windowTabs = window->tmuxLayout();
+            for (const QJsonValue &tab : windowTabs)
+                tabs.append(tab);
+        }
+        if (!tabs.isEmpty()) // no window left: keep what was saved
+            tmux->saveLayout(tabs);
+    });
+    QObject::connect(tmux, &TmuxManager::statusMessage, app, [app](const QString &message) {
+        QMessageBox *box = new QMessageBox(QMessageBox::Information, QStringLiteral("QTerminal"), message,
+                                           QMessageBox::Ok, app->activeWindow());
+        box->setAttribute(Qt::WA_DeleteOnClose);
+        box->open();
+    });
+    tmux->start();
 
     TerminalConfig initConfig = TerminalConfig(workdir, shell_command);
     app->newWindow(dropMode, initConfig);
