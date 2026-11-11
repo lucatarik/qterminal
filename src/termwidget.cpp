@@ -954,6 +954,7 @@ void TmuxScrollBar::feed()
     m_feeder->setEnabled(false);
     m_text.clear();
     m_readyTicks = 0;
+    m_readyStable = 0;
     m_readyTimer.start();
 }
 
@@ -965,7 +966,10 @@ void TmuxScrollBar::waitReady()
         m_readyTimer.stop();
         return;
     }
-    if (m_viewBar->maximum() < m_viewHistory && ++m_readyTicks < 1000)
+    // A short history shows a larger range for a moment (the terminal has not settled yet): the range
+    // has to be the history for a few ticks in a row, not only to reach it.
+    m_readyStable = m_viewBar->maximum() == m_viewHistory ? m_readyStable + 1 : 0;
+    if (m_readyStable < 4 && ++m_readyTicks < 1000)
         return;
     m_readyTimer.stop();
     if (m_viewBar->maximum() != m_viewHistory)

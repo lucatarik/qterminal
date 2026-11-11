@@ -891,7 +891,7 @@ diff -ruN -x .git orig/src/terminalcontext.h src/src/terminalcontext.h
 +#endif // TERMINALCONTEXT_H
 diff -ruN -x .git orig/src/termwidget.cpp src/src/termwidget.cpp
 --- orig/src/termwidget.cpp	2026-11-05 12:31:00.072052702 +0100
-+++ src/src/termwidget.cpp	2026-11-11 00:00:51.749130391 +0100
++++ src/src/termwidget.cpp	2026-11-11 12:05:29.723918918 +0100
 @@ -17,13 +17,31 @@
   ***************************************************************************/
  
@@ -1364,7 +1364,7 @@ diff -ruN -x .git orig/src/termwidget.cpp src/src/termwidget.cpp
          if (mev->button() == Qt::MiddleButton)
          {
              if(Properties::Instance()->swapMouseButtons2and3)
-@@ -287,6 +675,403 @@
+@@ -287,6 +675,407 @@
      return false;
  }
  
@@ -1647,6 +1647,7 @@ diff -ruN -x .git orig/src/termwidget.cpp src/src/termwidget.cpp
 +    m_feeder->setEnabled(false);
 +    m_text.clear();
 +    m_readyTicks = 0;
++    m_readyStable = 0;
 +    m_readyTimer.start();
 +}
 +
@@ -1658,7 +1659,10 @@ diff -ruN -x .git orig/src/termwidget.cpp src/src/termwidget.cpp
 +        m_readyTimer.stop();
 +        return;
 +    }
-+    if (m_viewBar->maximum() < m_viewHistory && ++m_readyTicks < 1000)
++    // A short history shows a larger range for a moment (the terminal has not settled yet): the range
++    // has to be the history for a few ticks in a row, not only to reach it.
++    m_readyStable = m_viewBar->maximum() == m_viewHistory ? m_readyStable + 1 : 0;
++    if (m_readyStable < 4 && ++m_readyTicks < 1000)
 +        return;
 +    m_readyTimer.stop();
 +    if (m_viewBar->maximum() != m_viewHistory)
@@ -1768,7 +1772,7 @@ diff -ruN -x .git orig/src/termwidget.cpp src/src/termwidget.cpp
  TermWidget::TermWidget(TerminalConfig &cfg, QWidget *parent)
      : QWidget(parent)
      , DBusAddressable(QStringLiteral("/terminals"))
-@@ -303,7 +1088,17 @@
+@@ -303,7 +1092,17 @@
  
      setLayout(m_layout);
  
@@ -1787,7 +1791,7 @@ diff -ruN -x .git orig/src/termwidget.cpp src/src/termwidget.cpp
      const auto objs = m_term->children();
  
      for (QObject *o : objs)
-@@ -332,6 +1127,30 @@
+@@ -332,6 +1131,30 @@
          m_layout->setContentsMargins(0, 0, 0, 0);
  
      m_term->propertiesChanged();
@@ -1820,7 +1824,7 @@ diff -ruN -x .git orig/src/termwidget.cpp src/src/termwidget.cpp
  void TermWidget::term_termGetFocus()
 diff -ruN -x .git orig/src/termwidget.h src/src/termwidget.h
 --- orig/src/termwidget.h	2026-11-05 12:31:00.072065907 +0100
-+++ src/src/termwidget.h	2026-11-11 00:00:51.749059295 +0100
++++ src/src/termwidget.h	2026-11-11 12:05:29.723893710 +0100
 @@ -31,6 +31,14 @@
  struct ca_context;
  #endif
@@ -1865,7 +1869,7 @@ diff -ruN -x .git orig/src/termwidget.h src/src/termwidget.h
      signals:
          void renameSession();
          void removeCurrentSession();
-@@ -56,31 +79,129 @@
+@@ -56,31 +79,130 @@
          void zoomOut();
          void zoomReset();
          void customContextMenuCall(const QPoint & pos);
@@ -1969,6 +1973,7 @@ diff -ruN -x .git orig/src/termwidget.h src/src/termwidget.h
 +    qsizetype m_fed = 0;
 +    int m_viewHistory = 0;         // lines above the screen in the view, when it is complete
 +    int m_readyTicks = 0;
++    int m_readyStable = 0;
 +    bool m_ready = false;
 +};
 +
@@ -1995,7 +2000,7 @@ diff -ruN -x .git orig/src/termwidget.h src/src/termwidget.h
          QStringList availableKeyBindings() { return m_term->availableKeyBindings(); }
  
          TermWidgetImpl * impl() { return m_term; }
-@@ -113,6 +234,7 @@
+@@ -113,6 +235,7 @@
              return false;
          }
          void paintEvent (QPaintEvent * event) override;

@@ -179,6 +179,7 @@ private:
     qsizetype m_fed = 0;
     int m_viewHistory = 0;         // lines above the screen in the view, when it is complete
     int m_readyTicks = 0;
+    int m_readyStable = 0;
     bool m_ready = false;
 };
 
