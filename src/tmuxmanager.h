@@ -62,6 +62,8 @@ public:
     QString paneCurrentPath(const QString &session) const;
     //! something other than the shell is running in the session
     bool sessionBusy(const QString &session) const;
+    //! True for the name of a shell as tmux reports it in pane_current_command
+    static bool isShell(const QString &command);
     void killSession(const QString &session) const;
     //! Scrolls the program that runs in the session, if it owns the scrolling (alternate screen or mouse
     //! tracking): \p lines > 0 goes back, < 0 forward. \p column and \p row (0-based) are where the wheel

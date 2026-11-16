@@ -162,12 +162,21 @@ void TmuxManager::writeConfig() const
              << QStringLiteral("set -ga terminal-overrides ',*:smcup@:rmcup@'");
     }
     // QTermWidget has no OSC 52: a tmux selection reaches the clipboard through a command
+    QString copyCommand;
     if (!QStandardPaths::findExecutable(QStringLiteral("wl-copy")).isEmpty() && qEnvironmentVariableIsSet("WAYLAND_DISPLAY"))
-        conf << QStringLiteral("set -s copy-command 'wl-copy'");
+        copyCommand = QStringLiteral("wl-copy");
     else if (!QStandardPaths::findExecutable(QStringLiteral("xclip")).isEmpty())
-        conf << QStringLiteral("set -s copy-command 'xclip -in -selection clipboard'");
+        copyCommand = QStringLiteral("xclip -in -selection clipboard");
     else if (!QStandardPaths::findExecutable(QStringLiteral("xsel")).isEmpty())
-        conf << QStringLiteral("set -s copy-command 'xsel --input --clipboard'");
+        copyCommand = QStringLiteral("xsel --input --clipboard");
+    if (!copyCommand.isEmpty())
+    {
+        conf << QStringLiteral("set -s copy-command '%1'").arg(copyCommand);
+        // A program that copies by itself (a TUI with mouse tracking, also over ssh) sends OSC 52:
+        // tmux keeps it in a buffer, and the hook takes it to the clipboard.
+        conf << QStringLiteral("set -g set-clipboard on")
+             << QStringLiteral("set-hook -g pane-set-clipboard \"run-shell -b 'tmux save-buffer - | %1'\"").arg(copyCommand);
+    }
 
     const QString xdgConfig = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation);
     const QStringList userConfs{QDir::homePath() + QStringLiteral("/.tmux.conf"),
@@ -301,6 +310,18 @@ QString TmuxManager::paneCurrentPath(const QString &session) const
     return out.trimmed();
 }
 
+bool TmuxManager::isShell(const QString &name)
+{
+    static const QStringList shells{QStringLiteral("bash"), QStringLiteral("zsh"), QStringLiteral("fish"),
+                                    QStringLiteral("sh"), QStringLiteral("dash"), QStringLiteral("ksh"),
+                                    QStringLiteral("tcsh"), QStringLiteral("csh"), QStringLiteral("nu"),
+                                    QStringLiteral("elvish"), QStringLiteral("xonsh")};
+    QString command = name.trimmed();
+    if (command.startsWith(QLatin1Char('-'))) // login shell
+        command.remove(0, 1);
+    return shells.contains(command) || command == QFileInfo(qEnvironmentVariable("SHELL")).fileName();
+}
+
 bool TmuxManager::sessionBusy(const QString &session) const
 {
     QString out;
@@ -310,18 +331,10 @@ bool TmuxManager::sessionBusy(const QString &session) const
     {
         return false;
     }
-    static const QStringList shells{QStringLiteral("bash"), QStringLiteral("zsh"), QStringLiteral("fish"),
-                                    QStringLiteral("sh"), QStringLiteral("dash"), QStringLiteral("ksh"),
-                                    QStringLiteral("tcsh"), QStringLiteral("csh"), QStringLiteral("nu"),
-                                    QStringLiteral("elvish"), QStringLiteral("xonsh")};
-    const QString userShell = QFileInfo(qEnvironmentVariable("SHELL")).fileName();
     const QStringList commands = out.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
     for (QString command : commands)
     {
-        command = command.trimmed();
-        if (command.startsWith(QLatin1Char('-'))) // login shell
-            command.remove(0, 1);
-        if (!shells.contains(command) && command != userShell)
+        if (!isShell(command))
             return true;
     }
     return false;

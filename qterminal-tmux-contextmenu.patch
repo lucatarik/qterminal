@@ -1,6 +1,6 @@
-diff -ruN -x .git orig/CMakeLists.txt src/CMakeLists.txt
---- orig/CMakeLists.txt	2026-11-05 12:31:00.070909494 +0100
-+++ src/CMakeLists.txt	2026-11-11 00:00:51.749203901 +0100
+diff -ruN orig/CMakeLists.txt src/CMakeLists.txt
+--- orig/CMakeLists.txt	2026-11-17 00:04:38.191057310 +0100
++++ src/CMakeLists.txt	2026-11-17 00:04:38.199078872 +0100
 @@ -84,6 +84,8 @@
      src/dbusaddressable.cpp
      src/tab-switcher.cpp
@@ -18,9 +18,9 @@ diff -ruN -x .git orig/CMakeLists.txt src/CMakeLists.txt
  )
  
  if (Qt6DBus_FOUND)
-diff -ruN -x .git orig/src/main.cpp src/src/main.cpp
---- orig/src/main.cpp	2026-11-05 12:31:00.071610696 +0100
-+++ src/src/main.cpp	2026-11-11 00:00:51.748879301 +0100
+diff -ruN orig/src/main.cpp src/src/main.cpp
+--- orig/src/main.cpp	2026-11-17 00:04:38.191580451 +0100
++++ src/src/main.cpp	2026-11-17 00:04:38.198791403 +0100
 @@ -34,12 +34,14 @@
  
  #include "mainwindow.h"
@@ -91,9 +91,9 @@ diff -ruN -x .git orig/src/main.cpp src/src/main.cpp
      TerminalConfig initConfig = TerminalConfig(workdir, shell_command);
      app->newWindow(dropMode, initConfig);
  
-diff -ruN -x .git orig/src/mainwindow.cpp src/src/mainwindow.cpp
---- orig/src/mainwindow.cpp	2026-11-05 12:31:00.071643068 +0100
-+++ src/src/mainwindow.cpp	2026-11-11 00:00:51.748895612 +0100
+diff -ruN orig/src/mainwindow.cpp src/src/mainwindow.cpp
+--- orig/src/mainwindow.cpp	2026-11-17 00:04:38.191594067 +0100
++++ src/src/mainwindow.cpp	2026-11-17 00:04:38.198805049 +0100
 @@ -42,6 +42,7 @@
  #include "propertiesdialog.h"
  #include "bookmarkswidget.h"
@@ -188,9 +188,9 @@ diff -ruN -x .git orig/src/mainwindow.cpp src/src/mainwindow.cpp
  void MainWindow::onCurrentTitleChanged(int index)
  {
      QString title;
-diff -ruN -x .git orig/src/mainwindow.h src/src/mainwindow.h
---- orig/src/mainwindow.h	2026-11-05 12:31:00.071680099 +0100
-+++ src/src/mainwindow.h	2026-11-11 00:00:51.748919918 +0100
+diff -ruN orig/src/mainwindow.h src/src/mainwindow.h
+--- orig/src/mainwindow.h	2026-11-17 00:04:38.191615388 +0100
++++ src/src/mainwindow.h	2026-11-17 00:04:38.198824085 +0100
 @@ -21,6 +21,7 @@
  
  #include "ui_qterminal.h"
@@ -225,9 +225,9 @@ diff -ruN -x .git orig/src/mainwindow.h src/src/mainwindow.h
 +    void setupTmuxMenu();
  };
  #endif //MAINWINDOW_H
-diff -ruN -x .git orig/src/properties.cpp src/src/properties.cpp
---- orig/src/properties.cpp	2026-11-05 12:31:00.071783797 +0100
-+++ src/src/properties.cpp	2026-11-11 00:00:51.748933124 +0100
+diff -ruN orig/src/properties.cpp src/src/properties.cpp
+--- orig/src/properties.cpp	2026-11-17 00:04:38.191666916 +0100
++++ src/src/properties.cpp	2026-11-17 00:04:38.198836389 +0100
 @@ -151,6 +151,10 @@
      saveStateOnExit = m_settings->value(QLatin1String("SaveStateOnExit"), true).toBool();
      useCWD = m_settings->value(QLatin1String("UseCWD"), true).toBool();
@@ -250,9 +250,9 @@ diff -ruN -x .git orig/src/properties.cpp src/src/properties.cpp
      m_settings->setValue(QLatin1String("AudibleBell"), audibleBell);
      m_settings->setValue(QLatin1String("Term"), term);
      m_settings->setValue(QLatin1String("HandleHistory"), handleHistoryCommand);
-diff -ruN -x .git orig/src/properties.h src/src/properties.h
---- orig/src/properties.h	2026-11-05 12:31:00.071812352 +0100
-+++ src/src/properties.h	2026-11-11 00:00:51.748950717 +0100
+diff -ruN orig/src/properties.h src/src/properties.h
+--- orig/src/properties.h	2026-11-17 00:04:38.191681023 +0100
++++ src/src/properties.h	2026-11-17 00:04:38.198852940 +0100
 @@ -22,6 +22,7 @@
  #include <QApplication>
  #include <QtCore>
@@ -275,9 +275,9 @@ diff -ruN -x .git orig/src/properties.h src/src/properties.h
          bool audibleBell;
  
          QString term;
-diff -ruN -x .git orig/src/tabbar.cpp src/src/tabbar.cpp
---- orig/src/tabbar.cpp	2026-11-05 12:31:00.071989511 +0100
-+++ src/src/tabbar.cpp	2026-11-11 00:00:51.748963822 +0100
+diff -ruN orig/src/tabbar.cpp src/src/tabbar.cpp
+--- orig/src/tabbar.cpp	2026-11-17 00:04:38.191766647 +0100
++++ src/src/tabbar.cpp	2026-11-17 00:04:38.198866286 +0100
 @@ -20,6 +20,9 @@
  #include <QPainter>
  #include <QStyleOption>
@@ -383,9 +383,9 @@ diff -ruN -x .git orig/src/tabbar.cpp src/src/tabbar.cpp
  }
  
  void TabBar::setFixedWidth(bool fixedWidth)
-diff -ruN -x .git orig/src/tabbar.h src/src/tabbar.h
---- orig/src/tabbar.h	2026-11-05 12:31:00.071999169 +0100
-+++ src/src/tabbar.h	2026-11-11 00:00:51.748975264 +0100
+diff -ruN orig/src/tabbar.h src/src/tabbar.h
+--- orig/src/tabbar.h	2026-11-17 00:04:38.191777558 +0100
++++ src/src/tabbar.h	2026-11-17 00:04:38.198876836 +0100
 @@ -22,6 +22,8 @@
  #include <QSize>
  #include <QTabBar>
@@ -419,9 +419,9 @@ diff -ruN -x .git orig/src/tabbar.h src/src/tabbar.h
  
      bool mFixedWidth;
      int mFixedWidthValue;
-diff -ruN -x .git orig/src/tabwidget.cpp src/src/tabwidget.cpp
---- orig/src/tabwidget.cpp	2026-11-05 12:31:00.072009950 +0100
-+++ src/src/tabwidget.cpp	2026-11-11 00:00:51.748986185 +0100
+diff -ruN orig/src/tabwidget.cpp src/src/tabwidget.cpp
+--- orig/src/tabwidget.cpp	2026-11-17 00:04:38.191789881 +0100
++++ src/src/tabwidget.cpp	2026-11-17 00:04:38.198886414 +0100
 @@ -33,6 +33,9 @@
  #include "properties.h"
  #include "qterminalapp.h"
@@ -563,9 +563,9 @@ diff -ruN -x .git orig/src/tabwidget.cpp src/src/tabwidget.cpp
 +    }
 +    return count() > 0;
 +}
-diff -ruN -x .git orig/src/tabwidget.h src/src/tabwidget.h
---- orig/src/tabwidget.h	2026-11-05 12:31:00.072024067 +0100
-+++ src/src/tabwidget.h	2026-11-11 00:00:51.749003358 +0100
+diff -ruN orig/src/tabwidget.h src/src/tabwidget.h
+--- orig/src/tabwidget.h	2026-11-17 00:04:38.191804249 +0100
++++ src/src/tabwidget.h	2026-11-17 00:04:38.198901914 +0100
 @@ -19,6 +19,7 @@
  #ifndef TAB_WIDGET
  #define TAB_WIDGET
@@ -587,9 +587,9 @@ diff -ruN -x .git orig/src/tabwidget.h src/src/tabwidget.h
  public slots:
      int addNewTab(TerminalConfig cfg);
      void removeTab(int index, bool prompt = false);
-diff -ruN -x .git orig/src/terminalconfig.cpp src/src/terminalconfig.cpp
---- orig/src/terminalconfig.cpp	2026-11-05 12:31:00.072033275 +0100
-+++ src/src/terminalconfig.cpp	2026-11-11 00:00:51.749015070 +0100
+diff -ruN orig/src/terminalconfig.cpp src/src/terminalconfig.cpp
+--- orig/src/terminalconfig.cpp	2026-11-17 00:04:38.191813937 +0100
++++ src/src/terminalconfig.cpp	2026-11-17 00:04:38.198912384 +0100
 @@ -19,7 +19,8 @@
  TerminalConfig::TerminalConfig(const TerminalConfig &cfg)
      : m_currentDirectory(cfg.m_currentDirectory),
@@ -609,9 +609,9 @@ diff -ruN -x .git orig/src/terminalconfig.cpp src/src/terminalconfig.cpp
      }
      return TerminalConfig::fromDbus(termArgs);
  }
-diff -ruN -x .git orig/src/terminalconfig.h src/src/terminalconfig.h
---- orig/src/terminalconfig.h	2026-11-05 12:31:00.072042963 +0100
-+++ src/src/terminalconfig.h	2026-11-11 00:00:51.749026983 +0100
+diff -ruN orig/src/terminalconfig.h src/src/terminalconfig.h
+--- orig/src/terminalconfig.h	2026-11-17 00:04:38.191823155 +0100
++++ src/src/terminalconfig.h	2026-11-17 00:04:38.198924066 +0100
 @@ -19,6 +19,10 @@
          QStringList getShell();
          bool hasCommand() const;
@@ -631,9 +631,9 @@ diff -ruN -x .git orig/src/terminalconfig.h src/src/terminalconfig.h
  };
  
  #endif
-diff -ruN -x .git orig/src/terminalcontext.cpp src/src/terminalcontext.cpp
+diff -ruN orig/src/terminalcontext.cpp src/src/terminalcontext.cpp
 --- orig/src/terminalcontext.cpp	1970-01-01 01:00:00.000000000 +0100
-+++ src/src/terminalcontext.cpp	2026-11-11 00:00:51.749036942 +0100
++++ src/src/terminalcontext.cpp	2026-11-17 00:04:38.198933224 +0100
 @@ -0,0 +1,186 @@
 +/***************************************************************************
 + *   This program is free software; you can redistribute it and/or modify  *
@@ -821,9 +821,9 @@ diff -ruN -x .git orig/src/terminalcontext.cpp src/src/terminalcontext.cpp
 +}
 +
 +}
-diff -ruN -x .git orig/src/terminalcontext.h src/src/terminalcontext.h
+diff -ruN orig/src/terminalcontext.h src/src/terminalcontext.h
 --- orig/src/terminalcontext.h	1970-01-01 01:00:00.000000000 +0100
-+++ src/src/terminalcontext.h	2026-11-11 00:00:51.749049135 +0100
++++ src/src/terminalcontext.h	2026-11-17 00:04:38.198943694 +0100
 @@ -0,0 +1,64 @@
 +/***************************************************************************
 + *   This program is free software; you can redistribute it and/or modify  *
@@ -889,10 +889,10 @@ diff -ruN -x .git orig/src/terminalcontext.h src/src/terminalcontext.h
 +}
 +
 +#endif // TERMINALCONTEXT_H
-diff -ruN -x .git orig/src/termwidget.cpp src/src/termwidget.cpp
---- orig/src/termwidget.cpp	2026-11-05 12:31:00.072052702 +0100
-+++ src/src/termwidget.cpp	2026-11-11 12:05:29.723918918 +0100
-@@ -17,13 +17,31 @@
+diff -ruN orig/src/termwidget.cpp src/src/termwidget.cpp
+--- orig/src/termwidget.cpp	2026-11-17 00:04:38.191832353 +0100
++++ src/src/termwidget.cpp	2026-11-17 00:04:38.198954104 +0100
+@@ -17,13 +17,32 @@
   ***************************************************************************/
  
  #include <QMenu>
@@ -909,6 +909,7 @@ diff -ruN -x .git orig/src/termwidget.cpp src/src/termwidget.cpp
 +#include <QBuffer>
 +#include <QClipboard>
 +#include <QDir>
++#include <QFile>
 +#include <QFileInfo>
 +#include <QProcess>
 +#include <QScrollBar>
@@ -924,7 +925,7 @@ diff -ruN -x .git orig/src/termwidget.cpp src/src/termwidget.cpp
  
  #ifdef HAVE_QDBUS
      #include <QtDBus/QtDBus>
-@@ -40,6 +58,8 @@
+@@ -40,6 +59,8 @@
  #include "config.h"
  #include "properties.h"
  #include "qterminalapp.h"
@@ -933,7 +934,7 @@ diff -ruN -x .git orig/src/termwidget.cpp src/src/termwidget.cpp
  
  static int TermWidgetCount = 0;
  
-@@ -64,6 +84,13 @@
+@@ -64,6 +85,13 @@
      setWorkingDirectory(cfg.getWorkingDirectory());
  
      QStringList shell = cfg.getShell();
@@ -947,7 +948,7 @@ diff -ruN -x .git orig/src/termwidget.cpp src/src/termwidget.cpp
      if (!shell.isEmpty())
      {
          setShellProgram(shell.at(0));
-@@ -98,6 +125,9 @@
+@@ -98,6 +126,9 @@
  
  TermWidgetImpl::~TermWidgetImpl()
  {
@@ -957,7 +958,7 @@ diff -ruN -x .git orig/src/termwidget.cpp src/src/termwidget.cpp
  #ifdef HAVE_LIBCANBERRA
      if (libcanberra_context) {
          ca_context_destroy (libcanberra_context);
-@@ -105,6 +135,24 @@
+@@ -105,6 +136,24 @@
  #endif
  }
  
@@ -982,7 +983,7 @@ diff -ruN -x .git orig/src/termwidget.cpp src/src/termwidget.cpp
  void TermWidgetImpl::propertiesChanged()
  {
      setMargin(Properties::Instance()->terminalMargin);
-@@ -137,7 +185,8 @@
+@@ -137,7 +186,8 @@
      setBoldIntense(Properties::Instance()->boldIntense);
  
      /* be consequent with qtermwidget.h here */
@@ -992,7 +993,7 @@ diff -ruN -x .git orig/src/termwidget.cpp src/src/termwidget.cpp
      case 0:
          setScrollBarPosition(QTermWidget::NoScrollBar);
          break;
-@@ -168,6 +217,195 @@
+@@ -168,6 +218,195 @@
      update();
  }
  
@@ -1188,7 +1189,7 @@ diff -ruN -x .git orig/src/termwidget.cpp src/src/termwidget.cpp
  void TermWidgetImpl::customContextMenuCall(const QPoint & pos)
  {
      auto mainWindow = findParent<MainWindow>(this);
-@@ -178,12 +416,67 @@
+@@ -178,12 +417,67 @@
      QMenu menu(mainWindow);
      QMap<QString, QAction*> actions = mainWindow->leaseActions();
  
@@ -1256,7 +1257,7 @@ diff -ruN -x .git orig/src/termwidget.cpp src/src/termwidget.cpp
      if (!actions.isEmpty())
      {
          menu.addSeparator();
-@@ -259,11 +552,106 @@
+@@ -259,11 +553,106 @@
      }
  }
  
@@ -1364,7 +1365,7 @@ diff -ruN -x .git orig/src/termwidget.cpp src/src/termwidget.cpp
          if (mev->button() == Qt::MiddleButton)
          {
              if(Properties::Instance()->swapMouseButtons2and3)
-@@ -287,6 +675,407 @@
+@@ -287,6 +676,433 @@
      return false;
  }
  
@@ -1372,7 +1373,7 @@ diff -ruN -x .git orig/src/termwidget.cpp src/src/termwidget.cpp
 +// ends what capture-pane wrote; what follows is the state of the pane
 +const QByteArray STATE_MARK = QByteArrayLiteral("\x01QTSTATE ");
 +const char STATE_FORMAT[] = "#{alternate_on} #{?mouse_any_flag,#{mouse_sgr_flag},0} #{pane_height} #{pane_in_mode}"
-+                            " #{history_size} #{?scroll_position,#{scroll_position},0}";
++                            " #{history_size} #{?scroll_position,#{scroll_position},0} #{pane_tty} #{pane_current_command}";
 +}
 +
 +TmuxScrollBar::TmuxScrollBar(const QString &session, TermWidgetImpl *live, QWidget *host)
@@ -1490,19 +1491,44 @@ diff -ruN -x .git orig/src/termwidget.cpp src/src/termwidget.cpp
 +    });
 +}
 +
++// What the pane says about itself (STATE_FORMAT). A program that died without leaving the alternate
++// screen or the mouse tracking leaves the pane in a state nobody owns: the wheel would go to the shell
++// and the history could not be read. With a shell in the foreground those modes are put back to normal,
++// as the reset command would.
++bool TmuxScrollBar::readState(const QStringList &f)
++{
++    m_alternate = f.at(0) == QLatin1String("1");
++    m_mouseTracked = f.at(1) == QLatin1String("1");
++    m_inMode = f.at(3) == QLatin1String("1");
++    m_history = f.at(4).toInt();
++    m_offset = qMin(f.at(5).toInt(), m_history);
++    const QString tty = f.at(6);
++    const QString command = QStringList(f.mid(7)).join(QLatin1Char(' '));
++    if ((m_alternate || m_mouseTracked) && !m_inMode && TmuxManager::isShell(command) && tty.startsWith(QLatin1String("/dev/")))
++    {
++        QFile pty(tty);
++        if (pty.open(QIODevice::WriteOnly))
++        {
++            pty.write("\x1b[?1049l\x1b[?47l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l");
++            pty.close();
++        }
++        m_alternate = false;
++        m_mouseTracked = false;
++        refresh();
++        return true;
++    }
++    return false;
++}
++
 +void TmuxScrollBar::pollFinished()
 +{
 +    const QStringList f = QString::fromUtf8(m_process->readAllStandardOutput()).trimmed().split(QLatin1Char(' '));
 +    m_process->deleteLater();
 +    m_process = nullptr;
 +
-+    if (f.size() == 6 && !m_view && !m_capturing)
++    if (f.size() >= 8 && !m_view && !m_capturing)
 +    {
-+        m_alternate = f.at(0) == QLatin1String("1");
-+        m_mouseTracked = f.at(1) == QLatin1String("1");
-+        m_inMode = f.at(3) == QLatin1String("1");
-+        m_history = f.at(4).toInt();
-+        m_offset = qMin(f.at(5).toInt(), m_history);
++        readState(f);
 +
 +        m_internal = true;
 +        setRange(0, programOwnsScroll() ? 0 : m_history);
@@ -1530,17 +1556,18 @@ diff -ruN -x .git orig/src/termwidget.cpp src/src/termwidget.cpp
 +        m_target = -1;
 +        return;
 +    }
-+    const QList<QByteArray> f = out.mid(mark + STATE_MARK.size()).trimmed().split(' ');
-+    if (f.size() != 6)
++    QStringList f;
++    for (const QByteArray &field : out.mid(mark + STATE_MARK.size()).trimmed().split(' '))
++        f << QString::fromUtf8(field);
++    if (f.size() < 8)
 +    {
 +        m_target = -1;
 +        return;
 +    }
-+    m_alternate = f.at(0) == "1";
-+    m_mouseTracked = f.at(1) == "1";
-+    m_inMode = f.at(3) == "1";
++    // what was read is the screen of the program that left, not the history
++    const bool reset = readState(f);
 +    const int rows = f.at(2).toInt();
-+    if (programOwnsScroll() || m_target < 0)
++    if (reset || programOwnsScroll() || m_target < 0)
 +    {
 +        m_target = -1;
 +        refresh();
@@ -1772,7 +1799,7 @@ diff -ruN -x .git orig/src/termwidget.cpp src/src/termwidget.cpp
  TermWidget::TermWidget(TerminalConfig &cfg, QWidget *parent)
      : QWidget(parent)
      , DBusAddressable(QStringLiteral("/terminals"))
-@@ -303,7 +1092,17 @@
+@@ -303,7 +1119,17 @@
  
      setLayout(m_layout);
  
@@ -1791,7 +1818,7 @@ diff -ruN -x .git orig/src/termwidget.cpp src/src/termwidget.cpp
      const auto objs = m_term->children();
  
      for (QObject *o : objs)
-@@ -332,6 +1131,30 @@
+@@ -332,6 +1158,30 @@
          m_layout->setContentsMargins(0, 0, 0, 0);
  
      m_term->propertiesChanged();
@@ -1822,9 +1849,9 @@ diff -ruN -x .git orig/src/termwidget.cpp src/src/termwidget.cpp
  }
  
  void TermWidget::term_termGetFocus()
-diff -ruN -x .git orig/src/termwidget.h src/src/termwidget.h
---- orig/src/termwidget.h	2026-11-05 12:31:00.072065907 +0100
-+++ src/src/termwidget.h	2026-11-11 12:05:29.723893710 +0100
+diff -ruN orig/src/termwidget.h src/src/termwidget.h
+--- orig/src/termwidget.h	2026-11-17 00:04:38.191844426 +0100
++++ src/src/termwidget.h	2026-11-17 00:04:38.198975495 +0100
 @@ -31,6 +31,14 @@
  struct ca_context;
  #endif
@@ -1869,7 +1896,7 @@ diff -ruN -x .git orig/src/termwidget.h src/src/termwidget.h
      signals:
          void renameSession();
          void removeCurrentSession();
-@@ -56,31 +79,130 @@
+@@ -56,31 +79,131 @@
          void zoomOut();
          void zoomReset();
          void customContextMenuCall(const QPoint & pos);
@@ -1944,6 +1971,7 @@ diff -ruN -x .git orig/src/termwidget.h src/src/termwidget.h
 +    void goTo(int value);
 +    void poll();
 +    void pollFinished();
++    bool readState(const QStringList &fields);
 +    void captureFinished();
 +    void openView(const QByteArray &text, int history, int rows);
 +    void startFeeding();
@@ -2000,7 +2028,7 @@ diff -ruN -x .git orig/src/termwidget.h src/src/termwidget.h
          QStringList availableKeyBindings() { return m_term->availableKeyBindings(); }
  
          TermWidgetImpl * impl() { return m_term; }
-@@ -113,6 +235,7 @@
+@@ -113,6 +236,7 @@
              return false;
          }
          void paintEvent (QPaintEvent * event) override;
@@ -2008,9 +2036,9 @@ diff -ruN -x .git orig/src/termwidget.h src/src/termwidget.h
  
      private slots:
          void term_termGetFocus();
-diff -ruN -x .git orig/src/termwidgetholder.cpp src/src/termwidgetholder.cpp
---- orig/src/termwidgetholder.cpp	2026-11-05 12:31:00.072075626 +0100
-+++ src/src/termwidgetholder.cpp	2026-11-11 00:00:51.749076959 +0100
+diff -ruN orig/src/termwidgetholder.cpp src/src/termwidgetholder.cpp
+--- orig/src/termwidgetholder.cpp	2026-11-17 00:04:38.191854255 +0100
++++ src/src/termwidgetholder.cpp	2026-11-17 00:04:38.198989341 +0100
 @@ -17,6 +17,7 @@
   ***************************************************************************/
  
@@ -2130,9 +2158,9 @@ diff -ruN -x .git orig/src/termwidgetholder.cpp src/src/termwidgetholder.cpp
              {
                  return true;
              }
-diff -ruN -x .git orig/src/termwidgetholder.h src/src/termwidgetholder.h
---- orig/src/termwidgetholder.h	2026-11-05 12:31:00.072089923 +0100
-+++ src/src/termwidgetholder.h	2026-11-11 00:00:51.749090414 +0100
+diff -ruN orig/src/termwidgetholder.h src/src/termwidgetholder.h
+--- orig/src/termwidgetholder.h	2026-11-17 00:04:38.191866318 +0100
++++ src/src/termwidgetholder.h	2026-11-17 00:04:38.199001835 +0100
 @@ -19,6 +19,7 @@
  #ifndef TERMWIDGETHOLDER_H
  #define TERMWIDGETHOLDER_H
@@ -2161,10 +2189,10 @@ diff -ruN -x .git orig/src/termwidgetholder.h src/src/termwidgetholder.h
  
      private slots:
          void setCurrentTerminal(TermWidget* term);
-diff -ruN -x .git orig/src/tmuxmanager.cpp src/src/tmuxmanager.cpp
+diff -ruN orig/src/tmuxmanager.cpp src/src/tmuxmanager.cpp
 --- orig/src/tmuxmanager.cpp	1970-01-01 01:00:00.000000000 +0100
-+++ src/src/tmuxmanager.cpp	2026-11-11 00:00:51.749100964 +0100
-@@ -0,0 +1,442 @@
++++ src/src/tmuxmanager.cpp	2026-11-17 00:04:38.199012155 +0100
+@@ -0,0 +1,455 @@
 +/***************************************************************************
 + *   This program is free software; you can redistribute it and/or modify  *
 + *   it under the terms of the GNU General Public License as published by  *
@@ -2329,12 +2357,21 @@ diff -ruN -x .git orig/src/tmuxmanager.cpp src/src/tmuxmanager.cpp
 +             << QStringLiteral("set -ga terminal-overrides ',*:smcup@:rmcup@'");
 +    }
 +    // QTermWidget has no OSC 52: a tmux selection reaches the clipboard through a command
++    QString copyCommand;
 +    if (!QStandardPaths::findExecutable(QStringLiteral("wl-copy")).isEmpty() && qEnvironmentVariableIsSet("WAYLAND_DISPLAY"))
-+        conf << QStringLiteral("set -s copy-command 'wl-copy'");
++        copyCommand = QStringLiteral("wl-copy");
 +    else if (!QStandardPaths::findExecutable(QStringLiteral("xclip")).isEmpty())
-+        conf << QStringLiteral("set -s copy-command 'xclip -in -selection clipboard'");
++        copyCommand = QStringLiteral("xclip -in -selection clipboard");
 +    else if (!QStandardPaths::findExecutable(QStringLiteral("xsel")).isEmpty())
-+        conf << QStringLiteral("set -s copy-command 'xsel --input --clipboard'");
++        copyCommand = QStringLiteral("xsel --input --clipboard");
++    if (!copyCommand.isEmpty())
++    {
++        conf << QStringLiteral("set -s copy-command '%1'").arg(copyCommand);
++        // A program that copies by itself (a TUI with mouse tracking, also over ssh) sends OSC 52:
++        // tmux keeps it in a buffer, and the hook takes it to the clipboard.
++        conf << QStringLiteral("set -g set-clipboard on")
++             << QStringLiteral("set-hook -g pane-set-clipboard \"run-shell -b 'tmux save-buffer - | %1'\"").arg(copyCommand);
++    }
 +
 +    const QString xdgConfig = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation);
 +    const QStringList userConfs{QDir::homePath() + QStringLiteral("/.tmux.conf"),
@@ -2468,6 +2505,18 @@ diff -ruN -x .git orig/src/tmuxmanager.cpp src/src/tmuxmanager.cpp
 +    return out.trimmed();
 +}
 +
++bool TmuxManager::isShell(const QString &name)
++{
++    static const QStringList shells{QStringLiteral("bash"), QStringLiteral("zsh"), QStringLiteral("fish"),
++                                    QStringLiteral("sh"), QStringLiteral("dash"), QStringLiteral("ksh"),
++                                    QStringLiteral("tcsh"), QStringLiteral("csh"), QStringLiteral("nu"),
++                                    QStringLiteral("elvish"), QStringLiteral("xonsh")};
++    QString command = name.trimmed();
++    if (command.startsWith(QLatin1Char('-'))) // login shell
++        command.remove(0, 1);
++    return shells.contains(command) || command == QFileInfo(qEnvironmentVariable("SHELL")).fileName();
++}
++
 +bool TmuxManager::sessionBusy(const QString &session) const
 +{
 +    QString out;
@@ -2477,18 +2526,10 @@ diff -ruN -x .git orig/src/tmuxmanager.cpp src/src/tmuxmanager.cpp
 +    {
 +        return false;
 +    }
-+    static const QStringList shells{QStringLiteral("bash"), QStringLiteral("zsh"), QStringLiteral("fish"),
-+                                    QStringLiteral("sh"), QStringLiteral("dash"), QStringLiteral("ksh"),
-+                                    QStringLiteral("tcsh"), QStringLiteral("csh"), QStringLiteral("nu"),
-+                                    QStringLiteral("elvish"), QStringLiteral("xonsh")};
-+    const QString userShell = QFileInfo(qEnvironmentVariable("SHELL")).fileName();
 +    const QStringList commands = out.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
 +    for (QString command : commands)
 +    {
-+        command = command.trimmed();
-+        if (command.startsWith(QLatin1Char('-'))) // login shell
-+            command.remove(0, 1);
-+        if (!shells.contains(command) && command != userShell)
++        if (!isShell(command))
 +            return true;
 +    }
 +    return false;
@@ -2607,10 +2648,10 @@ diff -ruN -x .git orig/src/tmuxmanager.cpp src/src/tmuxmanager.cpp
 +    if (file.open(QIODevice::WriteOnly | QIODevice::Truncate))
 +        file.write(QJsonDocument(tabs).toJson(QJsonDocument::Compact));
 +}
-diff -ruN -x .git orig/src/tmuxmanager.h src/src/tmuxmanager.h
+diff -ruN orig/src/tmuxmanager.h src/src/tmuxmanager.h
 --- orig/src/tmuxmanager.h	1970-01-01 01:00:00.000000000 +0100
-+++ src/src/tmuxmanager.h	2026-11-11 00:00:51.749116474 +0100
-@@ -0,0 +1,116 @@
++++ src/src/tmuxmanager.h	2026-11-17 00:04:38.199027154 +0100
+@@ -0,0 +1,118 @@
 +/***************************************************************************
 + *   This program is free software; you can redistribute it and/or modify  *
 + *   it under the terms of the GNU General Public License as published by  *
@@ -2675,6 +2716,8 @@ diff -ruN -x .git orig/src/tmuxmanager.h src/src/tmuxmanager.h
 +    QString paneCurrentPath(const QString &session) const;
 +    //! something other than the shell is running in the session
 +    bool sessionBusy(const QString &session) const;
++    //! True for the name of a shell as tmux reports it in pane_current_command
++    static bool isShell(const QString &command);
 +    void killSession(const QString &session) const;
 +    //! Scrolls the program that runs in the session, if it owns the scrolling (alternate screen or mouse
 +    //! tracking): \p lines > 0 goes back, < 0 forward. \p column and \p row (0-based) are where the wheel
@@ -2727,9 +2770,9 @@ diff -ruN -x .git orig/src/tmuxmanager.h src/src/tmuxmanager.h
 +};
 +
 +#endif // TMUXMANAGER_H
-diff -ruN -x .git orig/test/CMakeLists.txt src/test/CMakeLists.txt
---- orig/test/CMakeLists.txt	2026-11-05 12:31:00.074355928 +0100
-+++ src/test/CMakeLists.txt	2026-11-11 00:00:51.749167802 +0100
+diff -ruN orig/test/CMakeLists.txt src/test/CMakeLists.txt
+--- orig/test/CMakeLists.txt	2026-11-17 00:04:38.194168891 +0100
++++ src/test/CMakeLists.txt	2026-11-17 00:04:38.199044286 +0100
 @@ -17,6 +17,7 @@
  add_executable(qterminal_test
      qterminal_test.cpp
@@ -2738,9 +2781,9 @@ diff -ruN -x .git orig/test/CMakeLists.txt src/test/CMakeLists.txt
      ${QTERM_TEST_MOC})
  
  target_link_libraries(qterminal_test ${QT_TEST_LIB})
-diff -ruN -x .git orig/test/qterminal_test.cpp src/test/qterminal_test.cpp
---- orig/test/qterminal_test.cpp	2026-11-05 12:31:00.074366709 +0100
-+++ src/test/qterminal_test.cpp	2026-11-11 00:00:51.749182520 +0100
+diff -ruN orig/test/qterminal_test.cpp src/test/qterminal_test.cpp
+--- orig/test/qterminal_test.cpp	2026-11-17 00:04:38.194180113 +0100
++++ src/test/qterminal_test.cpp	2026-11-17 00:04:38.199056049 +0100
 @@ -18,6 +18,7 @@
  #include "qterminal_test.h"
  
@@ -2826,9 +2869,9 @@ diff -ruN -x .git orig/test/qterminal_test.cpp src/test/qterminal_test.cpp
 +}
 +
  QTEST_MAIN(QTerminalTest)
-diff -ruN -x .git orig/test/qterminal_test.h src/test/qterminal_test.h
---- orig/test/qterminal_test.h	2026-11-05 12:31:00.074375546 +0100
-+++ src/test/qterminal_test.h	2026-11-11 00:00:51.749193842 +0100
+diff -ruN orig/test/qterminal_test.h src/test/qterminal_test.h
+--- orig/test/qterminal_test.h	2026-11-17 00:04:38.194189200 +0100
++++ src/test/qterminal_test.h	2026-11-17 00:04:38.199069314 +0100
 @@ -27,6 +27,12 @@
      // Each private slot is a test function
  private Q_SLOTS:

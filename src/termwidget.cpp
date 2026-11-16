@@ -30,6 +30,7 @@
 #include <QBuffer>
 #include <QClipboard>
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QProcess>
 #include <QScrollBar>
@@ -679,7 +680,7 @@ namespace {
 // ends what capture-pane wrote; what follows is the state of the pane
 const QByteArray STATE_MARK = QByteArrayLiteral("\x01QTSTATE ");
 const char STATE_FORMAT[] = "#{alternate_on} #{?mouse_any_flag,#{mouse_sgr_flag},0} #{pane_height} #{pane_in_mode}"
-                            " #{history_size} #{?scroll_position,#{scroll_position},0}";
+                            " #{history_size} #{?scroll_position,#{scroll_position},0} #{pane_tty} #{pane_current_command}";
 }
 
 TmuxScrollBar::TmuxScrollBar(const QString &session, TermWidgetImpl *live, QWidget *host)
@@ -797,19 +798,44 @@ void TmuxScrollBar::poll()
     });
 }
 
+// What the pane says about itself (STATE_FORMAT). A program that died without leaving the alternate
+// screen or the mouse tracking leaves the pane in a state nobody owns: the wheel would go to the shell
+// and the history could not be read. With a shell in the foreground those modes are put back to normal,
+// as the reset command would.
+bool TmuxScrollBar::readState(const QStringList &f)
+{
+    m_alternate = f.at(0) == QLatin1String("1");
+    m_mouseTracked = f.at(1) == QLatin1String("1");
+    m_inMode = f.at(3) == QLatin1String("1");
+    m_history = f.at(4).toInt();
+    m_offset = qMin(f.at(5).toInt(), m_history);
+    const QString tty = f.at(6);
+    const QString command = QStringList(f.mid(7)).join(QLatin1Char(' '));
+    if ((m_alternate || m_mouseTracked) && !m_inMode && TmuxManager::isShell(command) && tty.startsWith(QLatin1String("/dev/")))
+    {
+        QFile pty(tty);
+        if (pty.open(QIODevice::WriteOnly))
+        {
+            pty.write("\x1b[?1049l\x1b[?47l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l");
+            pty.close();
+        }
+        m_alternate = false;
+        m_mouseTracked = false;
+        refresh();
+        return true;
+    }
+    return false;
+}
+
 void TmuxScrollBar::pollFinished()
 {
     const QStringList f = QString::fromUtf8(m_process->readAllStandardOutput()).trimmed().split(QLatin1Char(' '));
     m_process->deleteLater();
     m_process = nullptr;
 
-    if (f.size() == 6 && !m_view && !m_capturing)
+    if (f.size() >= 8 && !m_view && !m_capturing)
     {
-        m_alternate = f.at(0) == QLatin1String("1");
-        m_mouseTracked = f.at(1) == QLatin1String("1");
-        m_inMode = f.at(3) == QLatin1String("1");
-        m_history = f.at(4).toInt();
-        m_offset = qMin(f.at(5).toInt(), m_history);
+        readState(f);
 
         m_internal = true;
         setRange(0, programOwnsScroll() ? 0 : m_history);
@@ -837,17 +863,18 @@ void TmuxScrollBar::captureFinished()
         m_target = -1;
         return;
     }
-    const QList<QByteArray> f = out.mid(mark + STATE_MARK.size()).trimmed().split(' ');
-    if (f.size() != 6)
+    QStringList f;
+    for (const QByteArray &field : out.mid(mark + STATE_MARK.size()).trimmed().split(' '))
+        f << QString::fromUtf8(field);
+    if (f.size() < 8)
     {
         m_target = -1;
         return;
     }
-    m_alternate = f.at(0) == "1";
-    m_mouseTracked = f.at(1) == "1";
-    m_inMode = f.at(3) == "1";
+    // what was read is the screen of the program that left, not the history
+    const bool reset = readState(f);
     const int rows = f.at(2).toInt();
-    if (programOwnsScroll() || m_target < 0)
+    if (reset || programOwnsScroll() || m_target < 0)
     {
         m_target = -1;
         refresh();

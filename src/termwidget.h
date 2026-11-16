@@ -150,6 +150,7 @@ private:
     void goTo(int value);
     void poll();
     void pollFinished();
+    bool readState(const QStringList &fields);
     void captureFinished();
     void openView(const QByteArray &text, int history, int rows);
     void startFeeding();
